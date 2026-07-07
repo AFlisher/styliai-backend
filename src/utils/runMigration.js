@@ -1,0 +1,33 @@
+const { Client } = require('pg');
+const fs = require('fs');
+const path = require('path');
+require('dotenv').config();
+
+async function runMigration() {
+  if (!process.env.DATABASE_URL) {
+    console.error("❌ ERROR: DATABASE_URL is not set in your .env file!");
+    process.exit(1);
+  }
+
+  const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  });
+
+  try {
+    await client.connect();
+    console.log("✅ Connected to database. Running migration script...");
+
+    const sqlPath = path.join(__dirname, '../../migration.sql');
+    const sql = fs.readFileSync(sqlPath, 'utf8');
+
+    await client.query(sql);
+    console.log("✅ Database migration completed successfully!");
+  } catch (err) {
+    console.error("❌ Database migration failed:", err.message);
+  } finally {
+    await client.end();
+  }
+}
+
+runMigration();
