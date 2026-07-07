@@ -20,8 +20,14 @@ async function runMigration() {
 
     const sqlPath = path.join(__dirname, '../../migration.sql');
     const sql = fs.readFileSync(sqlPath, 'utf8');
-
     await client.query(sql);
+
+    const googleSqlPath = path.join(__dirname, '../../migration_google.sql');
+    if (fs.existsSync(googleSqlPath)) {
+      const googleSql = fs.readFileSync(googleSqlPath, 'utf8');
+      await client.query(googleSql);
+      console.log("✅ Google migration completed successfully!");
+    }
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);

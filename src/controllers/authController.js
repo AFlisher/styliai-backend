@@ -3,9 +3,13 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
+const { OAuth2Client } = require('google-auth-library');
 const db = require('../config/db');
 const sendEmail = require('../utils/sendEmail');
 const { renderVerificationPage, renderResetPasswordPage } = require('../utils/htmlTemplates');
+
+const GOOGLE_CLIENT_ID = '393948547098-qji62u4235f83e72eio9vi1fp4a9lmu9.apps.googleusercontent.com';
+const googleOAuth2Client = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // Helper to hash tokens with SHA-256 for secure database storage
 function hashToken(token) {
@@ -64,6 +68,7 @@ function generateRefreshToken(user) {
 
 // REGISTER endpoint
 async function register(req, res) {
+  let client;
   try {
     const validated = registerSchema.parse(req.body);
     
@@ -77,16 +82,22 @@ async function register(req, res) {
     const verificationToken = uuidv4();
     const passwordHash = await bcrypt.hash(validated.password, 10);
 
+    // Get a client from the pool for the transaction
+    client = await db.pool.connect();
+    
+    // BEGIN transaction
+    await client.query('BEGIN');
+
     // Save user inside PostgreSQL (public.users)
-    await db.query(`
-      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token)
-      VALUES ($1, $2, $3, $4, false, $5)
+    await client.query(`
+      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token, provider)
+      VALUES ($1, $2, $3, $4, false, $5, 'email')
     `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, verificationToken]);
 
     // Save corresponding profile inside public.profiles
-    await db.query(`
-      INSERT INTO public.profiles (id, full_name, email, credits)
-      VALUES ($1, $2, $3, 3)
+    await client.query(`
+      INSERT INTO public.profiles (id, full_name, email, provider, credits)
+      VALUES ($1, $2, $3, 'email', 3)
     `, [userId, validated.fullName, validated.email.toLowerCase()]);
 
     // Send verification email using Resend
@@ -107,20 +118,46 @@ async function register(req, res) {
       </div>
     `;
 
-    await sendEmail({
-      to: validated.email.toLowerCase(),
-      subject: "Verify your email - StyliAI",
-      html: emailHtml
-    });
+    try {
+      await sendEmail({
+        to: validated.email.toLowerCase(),
+        subject: "Verify your email - StyliAI",
+        html: emailHtml
+      });
+    } catch (emailErr) {
+      console.error("Resend email sending failed during registration:", emailErr);
+      throw new Error("verification_email_failed");
+    }
 
+    // COMMIT transaction if everything succeeded
+    await client.query('COMMIT');
     res.status(201).json({ message: "Registration successful. Please verify your email." });
 
   } catch (err) {
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error("Error during transaction rollback:", rollbackErr);
+      }
+    }
+
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: err.errors[0].message });
     }
+    
+    if (err.message === "verification_email_failed") {
+      return res.status(500).json({ 
+        message: "Account was not created because the verification email could not be sent. Please try again." 
+      });
+    }
+
     console.error("Registration error:", err);
     res.status(500).json({ message: "An unexpected error occurred during registration." });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 }
 
@@ -282,44 +319,45 @@ async function forgotPassword(req, res) {
     const userRes = await db.query('SELECT id, full_name FROM public.users WHERE email = $1', [validated.email.toLowerCase()]);
     
     // Check if user exists
-    if (userRes.rows.length > 0) {
-      const user = userRes.rows[0];
-      const resetToken = uuidv4();
-      const resetTokenHash = hashToken(resetToken);
-      // Link expires in 1 hour
-      const expiresAt = new Date(Date.now() + 3600 * 1000);
-
-      await db.query(
-        'UPDATE public.users SET reset_token_hash = $1, reset_token_expires_at = $2 WHERE id = $3',
-        [resetTokenHash, expiresAt, user.id]
-      );
-
-      const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
-      const resetLink = `${backendUrl}/api/auth/reset-password?token=${resetToken}`;
-
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
-          <h2 style="color: #E735F6; text-align: center;">Reset Your Password</h2>
-          <p>Hello ${user.full_name},</p>
-          <p>We received a request to reset your password. Click the button below to choose a new password. This link is valid for 1 hour.</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${resetLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; box-shadow: 0 4px 15px rgba(231, 53, 246, 0.4);">Reset Password</a>
-          </div>
-          <p style="color: #8A8A9D; font-size: 13px;">If you did not request a password reset, please ignore this email.</p>
-          <hr style="border-color: #1E1E2F; margin: 20px 0;" />
-          <p style="font-size: 11px; color: #8A8A9D; text-align: center;">StyliAI — Apply Stunning Photo Styles</p>
-        </div>
-      `;
-
-      await sendEmail({
-        to: validated.email.toLowerCase(),
-        subject: "Reset your password - StyliAI",
-        html: emailHtml
-      });
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ message: "No account found with this email." });
     }
 
-    // Always return a success response to prevent email enumeration
-    res.json({ message: "If the email exists, a password reset link has been sent." });
+    const user = userRes.rows[0];
+    const resetToken = uuidv4();
+    const resetTokenHash = hashToken(resetToken);
+    // Link expires in 1 hour
+    const expiresAt = new Date(Date.now() + 3600 * 1000);
+
+    await db.query(
+      'UPDATE public.users SET reset_token_hash = $1, reset_token_expires_at = $2 WHERE id = $3',
+      [resetTokenHash, expiresAt, user.id]
+    );
+
+    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
+    const resetLink = `${backendUrl}/api/auth/reset-password?token=${resetToken}`;
+
+    const emailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
+        <h2 style="color: #E735F6; text-align: center;">Reset Your Password</h2>
+        <p>Hello ${user.full_name},</p>
+        <p>We received a request to reset your password. Click the button below to choose a new password. This link is valid for 1 hour.</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${resetLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; box-shadow: 0 4px 15px rgba(231, 53, 246, 0.4);">Reset Password</a>
+        </div>
+        <p style="color: #8A8A9D; font-size: 13px;">If you did not request a password reset, please ignore this email.</p>
+        <hr style="border-color: #1E1E2F; margin: 20px 0;" />
+        <p style="font-size: 11px; color: #8A8A9D; text-align: center;">StyliAI — Apply Stunning Photo Styles</p>
+      </div>
+    `;
+
+    await sendEmail({
+      to: validated.email.toLowerCase(),
+      subject: "Reset your password - StyliAI",
+      html: emailHtml
+    });
+
+    res.json({ message: "Reset email sent." });
 
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -515,6 +553,169 @@ async function resendVerification(req, res) {
   }
 }
 
+// GOOGLE SIGN-IN endpoint
+async function googleSignIn(req, res) {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ message: 'Google ID token is required.' });
+    }
+
+    // Verify the Google ID token
+    let ticket;
+    try {
+      ticket = await googleOAuth2Client.verifyIdToken({
+        idToken,
+        audience: GOOGLE_CLIENT_ID,
+      });
+    } catch (verifyErr) {
+      console.error('Google token verification failed:', verifyErr.message);
+      return res.status(401).json({ message: 'Invalid Google ID token.' });
+    }
+
+    const payload = ticket.getPayload();
+    const googleId = payload.sub;
+    const email = payload.email.toLowerCase();
+    const fullName = payload.name || payload.email.split('@')[0];
+    const avatarUrl = payload.picture || null;
+
+    let user;
+
+    // 1) Look up by google_id
+    const byGoogleId = await db.query(
+      'SELECT id, email, full_name, created_at FROM public.users WHERE google_id = $1',
+      [googleId]
+    );
+
+    if (byGoogleId.rows.length > 0) {
+      // Existing Google user — just log in
+      user = byGoogleId.rows[0];
+    } else {
+      // 2) Look up by email
+      const byEmail = await db.query(
+        'SELECT id, email, full_name, avatar_url, created_at FROM public.users WHERE email = $1',
+        [email]
+      );
+
+      if (byEmail.rows.length > 0) {
+        // Existing email/password user — link Google account
+        const existing = byEmail.rows[0];
+        const updatedAvatar = existing.avatar_url || avatarUrl;
+        await db.query(
+          `UPDATE public.users
+           SET google_id = $1, provider = 'google', email_verified = true, avatar_url = $2
+           WHERE id = $3`,
+          [googleId, updatedAvatar, existing.id]
+        );
+        await db.query(
+          `UPDATE public.profiles
+           SET provider = 'google'
+           WHERE id = $1`,
+          [existing.id]
+        );
+        user = existing;
+      } else {
+        // 3) New user — create account
+        const userId = uuidv4();
+        await db.query(
+          `INSERT INTO public.users
+             (id, full_name, email, password_hash, email_verified, google_id, provider, avatar_url)
+           VALUES ($1, $2, $3, NULL, true, $4, 'google', $5)`,
+          [userId, fullName, email, googleId, avatarUrl]
+        );
+
+        // Create matching profile row
+        await db.query(
+          `INSERT INTO public.profiles (id, full_name, email, provider, avatar_url, credits)
+           VALUES ($1, $2, $3, 'google', $4, 3)`,
+          [userId, fullName, email, avatarUrl]
+        );
+
+        const newUserRes = await db.query(
+          'SELECT id, email, full_name, created_at FROM public.users WHERE id = $1',
+          [userId]
+        );
+        user = newUserRes.rows[0];
+      }
+    }
+
+    // Generate JWT access + refresh tokens (same as email login)
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+
+    const hashedRefresh = hashToken(refreshToken);
+    await db.query(
+      'UPDATE public.users SET refresh_token_hash = $1 WHERE id = $2',
+      [hashedRefresh, user.id]
+    );
+
+    res.json({
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.full_name,
+        emailConfirmedAt: user.created_at,
+      },
+    });
+
+  } catch (err) {
+    console.error('Google sign-in error:', err);
+    res.status(500).json({ message: 'An unexpected error occurred during Google sign-in.' });
+  }
+}
+
+// CHANGE PASSWORD endpoint
+async function changePassword(req, res) {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: "Current password and new password are required." });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: "New password must be at least 8 characters." });
+    }
+
+    const userId = req.user.id;
+    const userRes = await db.query(
+      'SELECT id, password_hash, provider FROM public.users WHERE id = $1',
+      [userId]
+    );
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    const user = userRes.rows[0];
+
+    // If Google account
+    if (user.provider === 'google') {
+      return res.status(400).json({ message: "Password cannot be changed for accounts registered via Google Sign-In." });
+    }
+
+    // Verify current password
+    const match = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!match) {
+      return res.status(400).json({ message: "Incorrect current password." });
+    }
+
+    // Hash and update the new password
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await db.query(
+      'UPDATE public.users SET password_hash = $1 WHERE id = $2',
+      [newHash, userId]
+    );
+
+    res.json({ message: "Password changed successfully." });
+
+  } catch (err) {
+    console.error("Change password error:", err);
+    res.status(500).json({ message: "An unexpected error occurred." });
+  }
+}
+
 module.exports = {
   register,
   verifyEmail,
@@ -524,5 +725,7 @@ module.exports = {
   renderResetPassword,
   postResetPassword,
   checkVerificationStatus,
-  resendVerification
+  resendVerification,
+  googleSignIn,
+  changePassword,
 };
