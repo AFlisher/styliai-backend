@@ -9,6 +9,11 @@
     "migrate": "node src/utils/runMigration.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+
+  "scripts": {
+  "create-admin": "node src/utils/createAdmin.js"
+},
+
   "keywords": [],
   "author": "",
   "license": "ISC",
