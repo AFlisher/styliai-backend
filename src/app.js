@@ -2,10 +2,14 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const categoryRoutes = require("./routes/categoryRoutes");
 const styleRoutes = require("./routes/styleRoutes");
+const uploadRoutes = require("./routes/uploadRoutes");
+const generateRoutes = require("./routes/generateRoutes");
+
 const app = express();
 
 // Configure helmet with custom CSP for our forms
@@ -30,8 +34,10 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
-app.use("/api/categories", categoryRoutes);
-app.use("/api/styles", styleRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/styles', styleRoutes);
+app.use('/api/upload', uploadRoutes);
+app.use('/api/generate', generateRoutes);
 
 // Default endpoint
 app.get('/', (req, res) => {
