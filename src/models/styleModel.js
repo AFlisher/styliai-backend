@@ -23,6 +23,48 @@ async function getAllStyles() {
   return result.rows;
 }
 
+async function getStyles(filters = {}) {
+  let query = `
+    SELECT
+      id,
+      category_id AS "categoryId",
+      name,
+      prompt,
+      negative_prompt AS "negativePrompt",
+      cover_image AS "coverImage",
+      credits_cost AS "creditsCost",
+      is_trending AS "isTrending",
+      is_premium AS "isPremium",
+      is_enabled AS "isEnabled",
+      sort_order AS "sortOrder",
+      created_at AS "createdAt",
+      updated_at AS "updatedAt"
+    FROM styles
+  `;
+
+  const whereClauses = [];
+  const params = [];
+
+  if (filters.categoryId) {
+    params.push(filters.categoryId);
+    whereClauses.push(`category_id = $${params.length}`);
+  }
+
+  if (filters.isEnabled !== undefined) {
+    params.push(filters.isEnabled);
+    whereClauses.push(`is_enabled = $${params.length}`);
+  }
+
+  if (whereClauses.length > 0) {
+    query += ` WHERE ${whereClauses.join(' AND ')}`;
+  }
+
+  query += ` ORDER BY sort_order ASC, created_at ASC`;
+
+  const result = await db.query(query, params);
+  return result.rows;
+}
+
 async function getStyleById(id) {
   const result = await db.query(
     `
@@ -192,6 +234,7 @@ async function reorderStyles(styles) {
 
 module.exports = {
   getAllStyles,
+  getStyles,
   getStyleById,
   createStyle,
   updateStyle,

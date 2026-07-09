@@ -2,7 +2,19 @@ const styleModel = require("../models/styleModel");
 
 async function getStyles(req, res) {
   try {
-    const styles = await styleModel.getAllStyles();
+    const { categoryId, all } = req.query;
+
+    const filters = {};
+    if (categoryId) {
+      filters.categoryId = categoryId;
+    }
+    
+    // Only return enabled styles by default, unless requested otherwise (e.g. by Admin dashboard)
+    if (all !== "true") {
+      filters.isEnabled = true;
+    }
+
+    const styles = await styleModel.getStyles(filters);
     res.json(styles);
   } catch (err) {
     console.error(err);
