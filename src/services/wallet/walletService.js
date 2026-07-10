@@ -223,38 +223,22 @@ async function rewardAd(userId) {
   try {
     await client.query("BEGIN");
 
-    // Auto-create daily_rewards table if not exists
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS daily_rewards (
-        id SERIAL PRIMARY KEY,
-        user_id UUID NOT NULL,
-        reward_date DATE NOT NULL DEFAULT CURRENT_DATE,
-        credits_claimed INTEGER NOT NULL DEFAULT 0,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-        UNIQUE(user_id, reward_date)
-      )
-    `);
-
-    // Check if user has already claimed today's credit
+    // 1. Check today's record in daily_rewards
     const limitCheck = await client.query(
-      `
-      SELECT credits_claimed
-      FROM daily_rewards
-      WHERE user_id = $1 AND reward_date = CURRENT_DATE
-      `,
+      "SELECT id FROM daily_rewards WHERE user_id = $1 AND reward_date = CURRENT_DATE AND credits_claimed >= 1",
       [userId]
     );
 
-    if (limitCheck.rows.length > 0 && limitCheck.rows[0].credits_claimed >= 1) {
+    if (limitCheck.rows.length > 0) {
       await client.query("COMMIT");
       return {
         rewarded: false,
         dailyLimitReached: true,
-        message: "Daily free credit already claimed."
+        message: "Daily free credit already claimed.",
       };
     }
 
+    // 2. Lock the user row (FOR UPDATE)
     const userRes = await client.query(
       `
       SELECT balance, ads_progress
@@ -274,7 +258,7 @@ async function rewardAd(userId) {
 
     adsProgress++;
 
-    // Less than 2 ads
+    // Less than 2 ads watched
     if (adsProgress < 2) {
       await client.query(
         `
@@ -294,7 +278,7 @@ async function rewardAd(userId) {
       };
     }
 
-    // 2 ads => Grant 1 Credit
+    // 2 ads watched => Add 1 Credit and reset ads progress
     balance++;
 
     await client.query(
@@ -308,23 +292,23 @@ async function rewardAd(userId) {
       [balance, userId]
     );
 
+    // Insert today's row into daily_rewards to track claimed limit
+    await client.query(
+      `
+      INSERT INTO daily_rewards (user_id, reward_date, credits_claimed)
+      VALUES ($1, CURRENT_DATE, 1)
+      ON CONFLICT (user_id, reward_date)
+      DO UPDATE SET credits_claimed = 1, updated_at = NOW()
+      `,
+      [userId]
+    );
+
     await recordTransaction(
       client,
       userId,
       1,
       "reward",
       "Rewarded for watching 2 ads"
-    );
-
-    // Insert today's row into daily_rewards to lock out further rewards
-    await client.query(
-      `
-      INSERT INTO daily_rewards (user_id, reward_date, credits_claimed, created_at, updated_at)
-      VALUES ($1, CURRENT_DATE, 1, NOW(), NOW())
-      ON CONFLICT (user_id, reward_date)
-      DO UPDATE SET credits_claimed = daily_rewards.credits_claimed + 1, updated_at = NOW()
-      `,
-      [userId]
     );
 
     await client.query("COMMIT");
