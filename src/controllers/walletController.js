@@ -55,7 +55,24 @@ async function getWalletHistory(req, res, next) {
   }
 }
 
+/**
+ * POST /api/wallet/reward
+ * Called after the user successfully watches a rewarded ad.
+ */
+async function rewardAd(req, res, next) {
+  try {
+    const userId = req.user.id;
+
+    const result = await walletService.rewardAd(userId);
+
+    return res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   getWalletInfo,
   getWalletHistory,
+  rewardAd,
 };

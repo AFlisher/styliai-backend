@@ -16,4 +16,7 @@ router.get("/", walletController.getWalletInfo);
 // GET /api/wallet/history
 router.get("/history", walletController.getWalletHistory);
 
+// POST /api/wallet/reward
+router.post("/reward", walletController.rewardAd);
+
 module.exports = router;

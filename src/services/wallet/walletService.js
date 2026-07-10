@@ -103,10 +103,28 @@ async function addBalance(userId, amount, type, description) {
     const newBalance = currentBalance + amount;
 
     // 2. Update user balance
+
+  if (type === "generation") {
     await client.query(
-      "UPDATE users SET balance = $1 WHERE id = $2",
+      `
+      UPDATE users
+      SET
+          balance = $1,
+          generated_images = generated_images + 1
+      WHERE id = $2
+      `,
       [newBalance, userId]
     );
+  } else {
+    await client.query(
+      `
+      UPDATE users
+      SET balance = $1
+      WHERE id = $2
+      `,
+      [newBalance, userId]
+    );
+  }
 
     // 3. Record transaction
     await recordTransaction(client, userId, amount, type, description);
@@ -195,10 +213,97 @@ async function getTransactionHistory(userId) {
   return res.rows;
 }
 
+/**
+ * Rewards the user after watching rewarded ads.
+ * Every 2 ads = +1 balance.
+ */
+async function rewardAd(userId) {
+  const client = await db.pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const userRes = await client.query(
+      `
+      SELECT balance, ads_progress
+      FROM users
+      WHERE id = $1
+      FOR UPDATE
+      `,
+      [userId]
+    );
+
+    if (userRes.rows.length === 0) {
+      throw new Error("User not found");
+    }
+
+    let balance = Number(userRes.rows[0].balance || 0);
+    let adsProgress = Number(userRes.rows[0].ads_progress || 0);
+
+    adsProgress++;
+
+    // أقل من إعلانين
+    if (adsProgress < 2) {
+      await client.query(
+        `
+        UPDATE users
+        SET ads_progress = $1
+        WHERE id = $2
+        `,
+        [adsProgress, userId]
+      );
+
+      await client.query("COMMIT");
+
+      return {
+        rewarded: false,
+        balance,
+        adsProgress,
+      };
+    }
+
+    // إعلانين => أضف Credit
+    balance++;
+
+    await client.query(
+      `
+      UPDATE users
+      SET
+          balance = $1,
+          ads_progress = 0
+      WHERE id = $2
+      `,
+      [balance, userId]
+    );
+
+    await recordTransaction(
+      client,
+      userId,
+      1,
+      "reward",
+      "Rewarded for watching 2 ads"
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      rewarded: true,
+      balance,
+      adsProgress: 0,
+    };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   getBalance,
   addBalance,
   deductBalance,
+  rewardAd,
   recordTransaction,
   getTransactionHistory,
 };
