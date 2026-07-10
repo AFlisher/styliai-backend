@@ -109,7 +109,6 @@ class FalProvider {
 
       return Buffer.from(arrayBuffer);
     } catch (err) {
-
       console.log("========== FAL ERROR ==========");
       console.dir(err, { depth: null });
 
@@ -123,9 +122,11 @@ class FalProvider {
 
       console.log("===============================");
 
-      throw new Error(
-        `[FalProvider Error] ${err.message}`
-      );
+      const customErr = new Error(`[FalProvider Error] ${err.message}`);
+      customErr.status = err.status || err.statusCode || err.response?.status || err.body?.status;
+      customErr.body = err.body;
+      customErr.response = err.response;
+      throw customErr;
     }
   }
 }
