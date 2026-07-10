@@ -9,6 +9,7 @@ const categoryRoutes = require("./routes/categoryRoutes");
 const styleRoutes = require("./routes/styleRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
 const generateRoutes = require("./routes/generateRoutes");
+const walletRoutes = require("./routes/walletRoutes");
 
 const app = express();
 
@@ -25,12 +26,27 @@ app.use(helmet({
   }
 }));
 
-app.use(cors({
-  origin: "http://localhost:5173",
-  credentials: true
-}));app.use(morgan('dev'));
-app.use(express.json());
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://styliai-admin-dashboard-z8it.vercel.app",
+];
 
+app.use(cors({
+  origin: function (origin, callback) {
+    // السماح للطلبات بدون Origin (مثل Postman)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+}));
+
+app.use(morgan("dev"));
+app.use(express.json());
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
@@ -38,6 +54,7 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/styles', styleRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/generate', generateRoutes);
+app.use('/api/wallet', walletRoutes);
 
 // Default endpoint
 app.get('/', (req, res) => {
