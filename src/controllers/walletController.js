@@ -58,10 +58,30 @@ async function getWalletInfo(req, res, next) {
 
     const { adsProgress, generatedImages } = userRes.rows[0];
 
+    // Check daily rewards limit
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS daily_rewards (
+        id SERIAL PRIMARY KEY,
+        user_id UUID NOT NULL,
+        reward_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        credits_claimed INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        UNIQUE(user_id, reward_date)
+      )
+    `);
+
+    const limitCheck = await db.query(
+      "SELECT credits_claimed FROM daily_rewards WHERE user_id = $1 AND reward_date = CURRENT_DATE",
+      [userId]
+    );
+    const dailyLimitReached = limitCheck.rows.length > 0 && limitCheck.rows[0].credits_claimed >= 1;
+
     return res.json({
       balance,
       adsProgress: adsProgress ?? 0,
       generatedImages: generatedImages ?? 0,
+      dailyLimitReached,
     });
   } catch (err) {
     next(err);
