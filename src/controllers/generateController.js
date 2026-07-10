@@ -1,4 +1,5 @@
 const generationService = require("../services/generation/generationService");
+const walletService = require("../services/wallet/walletService");
 
 /**
  * Controller to handle AI style generation requests.
@@ -7,6 +8,7 @@ const generationService = require("../services/generation/generationService");
 async function generateImage(req, res) {
   try {
     const { styleId } = req.body;
+    const userId = req.user.id;
 
     // 1. Validation checks
     if (!req.file) {
@@ -21,10 +23,26 @@ async function generateImage(req, res) {
       });
     }
 
-    // 2. Invoke generation orchestration service
+    // Check user balance before calling generation pipeline
+    const balance = await walletService.getBalance(userId);
+    if (balance < 1) {
+      return res.status(403).json({
+        message: "Insufficient balance"
+      });
+    }
+
+    // 2. Invoke generation orchestration service (uploads image, calls AI)
     const generatedImageUrl = await generationService.generate(req.file, styleId);
 
-    // 3. Return JSON payload
+    // 3. Deduct exactly one credit only after successful generation
+    await walletService.deductBalance(
+      userId,
+      1,
+      "generation",
+      "Image generated"
+    );
+
+    // 4. Return JSON payload
     return res.status(200).json({
       success: true,
       generatedImageUrl
