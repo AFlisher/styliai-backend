@@ -7,7 +7,10 @@ const router = express.Router();
 const walletController = require("../controllers/walletController");
 const authMiddleware = require("../middleware/authMiddleware");
 
-// All wallet endpoints require JWT authentication
+// POST /api/wallet/reward/verify (No auth required, called directly by Google AdMob callback)
+router.post("/reward/verify", walletController.verifyRewardedAd);
+
+// All wallet endpoints below require JWT authentication
 router.use(authMiddleware);
 
 // GET /api/wallet
