@@ -36,6 +36,13 @@ async function runMigration() {
       console.log("✅ Ad transactions migration completed successfully!");
     }
 
+    const walletTypeFixSqlPath = path.join(__dirname, '../../migration_fix_wallet_transaction_type.sql');
+    if (fs.existsSync(walletTypeFixSqlPath)) {
+      const walletTypeFixSql = fs.readFileSync(walletTypeFixSqlPath, 'utf8');
+      await client.query(walletTypeFixSql);
+      console.log("✅ Wallet transaction type fix migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);
