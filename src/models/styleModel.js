@@ -9,7 +9,7 @@ async function getAllStyles() {
       prompt,
       negative_prompt AS "negativePrompt",
       cover_image AS "coverImage",
-      credits_cost AS "creditsCost",
+      credit_cost AS "creditsCost",
       credit_cost AS "creditCost",
       is_trending AS "isTrending",
       is_premium AS "isPremium",
@@ -33,7 +33,7 @@ async function getStyles(filters = {}) {
       prompt,
       negative_prompt AS "negativePrompt",
       cover_image AS "coverImage",
-      credits_cost AS "creditsCost",
+      credit_cost AS "creditsCost",
       credit_cost AS "creditCost",
       is_trending AS "isTrending",
       is_premium AS "isPremium",
@@ -77,7 +77,7 @@ async function getStyleById(id) {
       prompt,
       negative_prompt AS "negativePrompt",
       cover_image AS "coverImage",
-      credits_cost AS "creditsCost",
+      credit_cost AS "creditsCost",
       credit_cost AS "creditCost",
       is_trending AS "isTrending",
       is_premium AS "isPremium",
@@ -103,7 +103,6 @@ async function createStyle(style) {
       prompt,
       negative_prompt,
       cover_image,
-      credits_cost,
       credit_cost,
       is_trending,
       is_premium,
@@ -111,7 +110,7 @@ async function createStyle(style) {
       sort_order
     )
     VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
     )
     RETURNING
       id,
@@ -120,7 +119,7 @@ async function createStyle(style) {
       prompt,
       negative_prompt AS "negativePrompt",
       cover_image AS "coverImage",
-      credits_cost AS "creditsCost",
+      credit_cost AS "creditsCost",
       credit_cost AS "creditCost",
       is_trending AS "isTrending",
       is_premium AS "isPremium",
@@ -135,7 +134,6 @@ async function createStyle(style) {
       style.prompt,
       style.negativePrompt,
       style.coverImage,
-      style.creditsCost || 1,
       style.creditCost ?? 1,
       style.isTrending,
       style.isPremium,
@@ -157,14 +155,13 @@ async function updateStyle(id, style) {
       prompt = $3,
       negative_prompt = $4,
       cover_image = $5,
-      credits_cost = $6,
-      credit_cost = $7,
-      is_trending = $8,
-      is_premium = $9,
-      is_enabled = $10,
-      sort_order = $11,
+      credit_cost = $6,
+      is_trending = $7,
+      is_premium = $8,
+      is_enabled = $9,
+      sort_order = $10,
       updated_at = NOW()
-    WHERE id = $12
+    WHERE id = $11
     RETURNING
       id,
       category_id AS "categoryId",
@@ -172,7 +169,7 @@ async function updateStyle(id, style) {
       prompt,
       negative_prompt AS "negativePrompt",
       cover_image AS "coverImage",
-      credits_cost AS "creditsCost",
+      credit_cost AS "creditsCost",
       credit_cost AS "creditCost",
       is_trending AS "isTrending",
       is_premium AS "isPremium",
@@ -187,7 +184,6 @@ async function updateStyle(id, style) {
       style.prompt,
       style.negativePrompt,
       style.coverImage,
-      style.creditsCost || 1,
       style.creditCost ?? 1,
       style.isTrending,
       style.isPremium,
