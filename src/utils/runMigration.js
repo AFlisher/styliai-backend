@@ -29,6 +29,34 @@ async function runMigration() {
       console.log("✅ Google migration completed successfully!");
     }
 
+    const usersWalletColumnsSqlPath = path.join(__dirname, '../../migration_users_wallet_columns.sql');
+    if (fs.existsSync(usersWalletColumnsSqlPath)) {
+      const usersWalletColumnsSql = fs.readFileSync(usersWalletColumnsSqlPath, 'utf8');
+      await client.query(usersWalletColumnsSql);
+      console.log("✅ Users wallet columns migration completed successfully!");
+    }
+
+    const adminsSqlPath = path.join(__dirname, '../../migration_admins.sql');
+    if (fs.existsSync(adminsSqlPath)) {
+      const adminsSql = fs.readFileSync(adminsSqlPath, 'utf8');
+      await client.query(adminsSql);
+      console.log("✅ Admins migration completed successfully!");
+    }
+
+    const catalogSqlPath = path.join(__dirname, '../../migration_catalog.sql');
+    if (fs.existsSync(catalogSqlPath)) {
+      const catalogSql = fs.readFileSync(catalogSqlPath, 'utf8');
+      await client.query(catalogSql);
+      console.log("✅ Catalog migration completed successfully!");
+    }
+
+    const walletLedgerSqlPath = path.join(__dirname, '../../migration_wallet_ledger.sql');
+    if (fs.existsSync(walletLedgerSqlPath)) {
+      const walletLedgerSql = fs.readFileSync(walletLedgerSqlPath, 'utf8');
+      await client.query(walletLedgerSql);
+      console.log("✅ Wallet ledger migration completed successfully!");
+    }
+
     const adTransactionsSqlPath = path.join(__dirname, '../../migration_ad_transactions.sql');
     if (fs.existsSync(adTransactionsSqlPath)) {
       const adTransactionsSql = fs.readFileSync(adTransactionsSqlPath, 'utf8');
