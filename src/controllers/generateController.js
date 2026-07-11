@@ -38,24 +38,48 @@ async function generateImage(req, res) {
       });
     }
 
-    // Check user balance against the style's configured cost before calling generation pipeline
-    const balance = await walletService.getBalance(userId);
-    if (balance < style.creditCost) {
-      return res.status(403).json({
-        message: "Insufficient balance"
-      });
-    }
-
-    // 2. Invoke generation orchestration service (uploads image, calls AI)
-    const generatedImageUrl = await generationService.generate(req.file, styleId);
-
-    // 3. Deduct the style's configured cost only after successful generation
+    // 2. Atomically check-and-deduct BEFORE calling the AI provider. deductBalance
+    // is row-locked, so this closes the race window a separate getBalance()
+    // pre-check would leave open, and avoids incurring AI provider cost for
+    // requests that shouldn't proceed (the losing concurrent request fails here,
+    // before ever reaching the paid AI call).
     await walletService.deductBalance(
       userId,
       style.creditCost,
       "generation",
       "Image generated"
     );
+
+    // 3. Invoke generation orchestration service (uploads image, calls AI)
+    let generatedImageUrl;
+    try {
+      generatedImageUrl = await generationService.generate(req.file, styleId);
+    } catch (genErr) {
+      // Generation failed after the charge already succeeded - refund so the
+      // user isn't charged for a failed generation. A refund failure is a
+      // financial inconsistency and must never be silently swallowed.
+      try {
+        await walletService.addBalance(
+          userId,
+          style.creditCost,
+          "refund",
+          "Refund for failed generation"
+        );
+      } catch (refundErr) {
+        console.error(
+          "[FINANCIAL INCONSISTENCY] Refund failed after a failed generation - user was charged but never received a refund.",
+          {
+            userId,
+            amount: style.creditCost,
+            styleId,
+            originalError: genErr && genErr.message,
+            refundError: refundErr && refundErr.message,
+          }
+        );
+        throw refundErr;
+      }
+      throw genErr;
+    }
 
     // 4. Return JSON payload
     return res.status(200).json({
@@ -65,6 +89,12 @@ async function generateImage(req, res) {
 
   } catch (err) {
     console.error("AI Generation Controller Error:", err);
+
+    if (err.message === "Insufficient balance") {
+      return res.status(403).json({
+        message: "Insufficient balance"
+      });
+    }
 
     if (err.message === "Style preset not found.") {
       return res.status(404).json({
