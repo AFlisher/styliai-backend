@@ -28,6 +28,14 @@ async function runMigration() {
       await client.query(googleSql);
       console.log("✅ Google migration completed successfully!");
     }
+
+    const adTransactionsSqlPath = path.join(__dirname, '../../migration_ad_transactions.sql');
+    if (fs.existsSync(adTransactionsSqlPath)) {
+      const adTransactionsSql = fs.readFileSync(adTransactionsSqlPath, 'utf8');
+      await client.query(adTransactionsSql);
+      console.log("✅ Ad transactions migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);

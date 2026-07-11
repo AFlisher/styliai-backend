@@ -136,15 +136,16 @@ async function verifyRewardedAd(req, res) {
       return res.status(400).json({ message: "user_id or custom_data is required." });
     }
 
-    // Auto-create processed transactions table if not exists
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS processed_ad_transactions (
-        transaction_id TEXT PRIMARY KEY,
-        user_id UUID NOT NULL,
-        reward_amount INTEGER,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-      )
-    `);
+    // Signature and key_id are mandatory: reject any callback that omits them
+    // instead of silently skipping verification (see Roadmap Item 1.3).
+    if (!signature || !key_id) {
+      return res.status(400).json({ message: "Missing required AdMob SSV signature parameters." });
+    }
+
+    const isValid = await verifyAdMobSSVSignature(req, signature, key_id);
+    if (!isValid) {
+      return res.status(400).json({ message: "Invalid AdMob SSV signature" });
+    }
 
     // Check duplicate transaction_id to prevent duplicate claims
     const dupCheck = await db.query(
@@ -154,14 +155,6 @@ async function verifyRewardedAd(req, res) {
 
     if (dupCheck.rows.length > 0) {
       return res.status(200).json({ message: "Duplicate transaction ignored" });
-    }
-
-    // Crytographic signature check (when signature parameters are provided)
-    if (signature && key_id) {
-      const isValid = await verifyAdMobSSVSignature(req, signature, key_id);
-      if (!isValid) {
-        return res.status(400).json({ message: "Invalid AdMob SSV signature" });
-      }
     }
 
     // Call existing wallet reward logic
