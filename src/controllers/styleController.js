@@ -33,7 +33,7 @@ async function createStyle(req, res) {
       prompt,
       negativePrompt = null,
       coverImage = null,
-      creditCost = 1,
+      creditCost,
       isTrending = false,
       isPremium = false,
       isEnabled = true,
@@ -58,13 +58,24 @@ async function createStyle(req, res) {
       });
     }
 
+    let parsedCreditCost = 1;
+    if (creditCost !== undefined) {
+      const numericCreditCost = Number(creditCost);
+      if (!Number.isInteger(numericCreditCost) || numericCreditCost < 0) {
+        return res.status(400).json({
+          message: "Credit cost must be a non-negative whole number.",
+        });
+      }
+      parsedCreditCost = numericCreditCost;
+    }
+
     const style = await styleModel.createStyle({
       categoryId,
       name: name.trim(),
       prompt: prompt.trim(),
       negativePrompt,
       coverImage,
-      creditCost: Number(creditCost) || 1,
+      creditCost: parsedCreditCost,
       isTrending,
       isPremium,
       isEnabled,
@@ -98,7 +109,7 @@ async function updateStyle(req, res) {
       prompt,
       negativePrompt = null,
       coverImage = null,
-      creditCost = 1,
+      creditCost,
       isTrending = false,
       isPremium = false,
       isEnabled = true,
@@ -123,13 +134,24 @@ async function updateStyle(req, res) {
       });
     }
 
+    let parsedCreditCost = 1;
+    if (creditCost !== undefined) {
+      const numericCreditCost = Number(creditCost);
+      if (!Number.isInteger(numericCreditCost) || numericCreditCost < 0) {
+        return res.status(400).json({
+          message: "Credit cost must be a non-negative whole number.",
+        });
+      }
+      parsedCreditCost = numericCreditCost;
+    }
+
     const style = await styleModel.updateStyle(id, {
       categoryId,
       name: name.trim(),
       prompt: prompt.trim(),
       negativePrompt,
       coverImage,
-      creditCost: Number(creditCost) || 1,
+      creditCost: parsedCreditCost,
       isTrending,
       isPremium,
       isEnabled,
