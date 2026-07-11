@@ -1,5 +1,6 @@
 const generationService = require("../services/generation/generationService");
 const walletService = require("../services/wallet/walletService");
+const styleModel = require("../models/styleModel");
 
 /**
  * Controller to handle AI style generation requests.
@@ -23,9 +24,23 @@ async function generateImage(req, res) {
       });
     }
 
-    // Check user balance before calling generation pipeline
+    // Look up the style early so we know its real configured cost
+    // before checking balance or deducting credits.
+    const style = await styleModel.getStyleById(styleId);
+    if (!style) {
+      return res.status(404).json({
+        message: "Style preset not found."
+      });
+    }
+    if (!style.isEnabled) {
+      return res.status(400).json({
+        message: "Style is disabled."
+      });
+    }
+
+    // Check user balance against the style's configured cost before calling generation pipeline
     const balance = await walletService.getBalance(userId);
-    if (balance < 1) {
+    if (balance < style.creditCost) {
       return res.status(403).json({
         message: "Insufficient balance"
       });
@@ -34,10 +49,10 @@ async function generateImage(req, res) {
     // 2. Invoke generation orchestration service (uploads image, calls AI)
     const generatedImageUrl = await generationService.generate(req.file, styleId);
 
-    // 3. Deduct exactly one credit only after successful generation
+    // 3. Deduct the style's configured cost only after successful generation
     await walletService.deductBalance(
       userId,
-      1,
+      style.creditCost,
       "generation",
       "Image generated"
     );

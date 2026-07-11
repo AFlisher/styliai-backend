@@ -96,8 +96,8 @@ async function register(req, res) {
 
     // Save corresponding profile inside public.profiles
     await client.query(`
-      INSERT INTO public.profiles (id, full_name, email, provider, credits)
-      VALUES ($1, $2, $3, 'email', 3)
+      INSERT INTO public.profiles (id, full_name, email, provider)
+      VALUES ($1, $2, $3, 'email')
     `, [userId, validated.fullName, validated.email.toLowerCase()]);
 
     // Send verification email using Resend
@@ -626,8 +626,8 @@ async function googleSignIn(req, res) {
 
         // Create matching profile row
         await db.query(
-          `INSERT INTO public.profiles (id, full_name, email, provider, avatar_url, credits)
-           VALUES ($1, $2, $3, 'google', $4, 3)`,
+          `INSERT INTO public.profiles (id, full_name, email, provider, avatar_url)
+           VALUES ($1, $2, $3, 'google', $4)`,
           [userId, fullName, email, avatarUrl]
         );
 
