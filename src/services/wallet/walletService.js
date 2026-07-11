@@ -103,19 +103,6 @@ async function addBalance(userId, amount, type, description) {
     const newBalance = currentBalance + amount;
 
     // 2. Update user balance
-
-  if (type === "generation") {
-    await client.query(
-      `
-      UPDATE users
-      SET
-          balance = $1,
-          generated_images = generated_images + 1
-      WHERE id = $2
-      `,
-      [newBalance, userId]
-    );
-  } else {
     await client.query(
       `
       UPDATE users
@@ -124,7 +111,6 @@ async function addBalance(userId, amount, type, description) {
       `,
       [newBalance, userId]
     );
-  }
 
     // 3. Record transaction
     await recordTransaction(client, userId, amount, type, description);
@@ -175,11 +161,20 @@ async function deductBalance(userId, amount, type, description) {
 
     const newBalance = currentBalance - amount;
 
-    // 3. Update user balance
-    await client.query(
-      "UPDATE users SET balance = $1 WHERE id = $2",
-      [newBalance, userId]
-    );
+    // 3. Update user balance (and, atomically, the generated_images counter
+    // for generation-type deductions - this is the single source of truth
+    // for how many images a user has generated)
+    if (type === "generation") {
+      await client.query(
+        "UPDATE users SET balance = $1, generated_images = generated_images + 1 WHERE id = $2",
+        [newBalance, userId]
+      );
+    } else {
+      await client.query(
+        "UPDATE users SET balance = $1 WHERE id = $2",
+        [newBalance, userId]
+      );
+    }
 
     // 4. Record transaction (as a negative amount for deductions)
     await recordTransaction(client, userId, -amount, type, description);
