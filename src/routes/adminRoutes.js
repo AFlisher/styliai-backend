@@ -1,6 +1,8 @@
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const adminController = require("../controllers/adminController");
+const adminStatsController = require("../controllers/adminStatsController");
+const adminAuthMiddleware = require("../middleware/adminAuthMiddleware");
 
 const router = express.Router();
 
@@ -12,5 +14,6 @@ const limiter = rateLimit({
 });
 
 router.post("/login", limiter, adminController.login);
+router.get("/stats", adminAuthMiddleware, adminStatsController.getStats);
 
 module.exports = router;
