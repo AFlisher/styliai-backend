@@ -29,6 +29,7 @@ app.use(helmet({
 const allowedOrigins = [
   "http://localhost:5173",
   "https://styliai-admin-dashboard-z8it.vercel.app",
+  "https://styliai-admin-dashboard.vercel.app",
 ];
 
 app.use(cors({
