@@ -39,6 +39,49 @@ async function uploadImage(req, res) {
   }
 }
 
+async function deleteImage(req, res) {
+  try {
+    const { url } = req.body;
+
+    if (!url) {
+      return res.status(400).json({
+        message: "Image URL is required.",
+      });
+    }
+
+    let fileName;
+    try {
+      fileName = new URL(url).pathname.split("/").pop();
+    } catch {
+      return res.status(400).json({
+        message: "Invalid image URL.",
+      });
+    }
+
+    if (!fileName) {
+      return res.status(400).json({
+        message: "Invalid image URL.",
+      });
+    }
+
+    const { error } = await supabase.storage
+      .from("style-images")
+      .remove([fileName]);
+
+    if (error) throw error;
+
+    return res.status(204).send();
+
+  } catch (err) {
+    console.error(err);
+
+    return res.status(500).json({
+      message: "Image deletion failed.",
+    });
+  }
+}
+
 module.exports = {
   uploadImage,
+  deleteImage,
 };

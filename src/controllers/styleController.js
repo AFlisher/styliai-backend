@@ -37,7 +37,7 @@ async function createStyle(req, res) {
       isTrending = false,
       isPremium = false,
       isEnabled = true,
-      sortOrder = 0,
+      sortOrder,
     } = req.body;
 
     if (!categoryId) {
@@ -69,6 +69,9 @@ async function createStyle(req, res) {
       parsedCreditCost = numericCreditCost;
     }
 
+    // sortOrder is intentionally left undefined when the caller doesn't
+    // provide one - styleModel.createStyle appends the new style to the
+    // end of its category instead of defaulting to 0.
     const style = await styleModel.createStyle({
       categoryId,
       name: name.trim(),

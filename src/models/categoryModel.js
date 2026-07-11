@@ -20,9 +20,9 @@ async function createCategory({ name, isEnabled }) {
   const result = await db.query(
     `
     INSERT INTO categories
-      (name, is_enabled)
+      (name, is_enabled, sort_order)
     VALUES
-      ($1, $2)
+      ($1, $2, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM categories))
     RETURNING
       id,
       name,

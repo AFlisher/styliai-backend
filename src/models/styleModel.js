@@ -107,7 +107,8 @@ async function createStyle(style) {
       sort_order
     )
     VALUES (
-      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+      $1, $2, $3, $4, $5, $6, $7, $8, $9,
+      COALESCE($10, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM styles WHERE category_id = $1))
     )
     RETURNING
       id,
@@ -134,7 +135,7 @@ async function createStyle(style) {
       style.isTrending,
       style.isPremium,
       style.isEnabled,
-      style.sortOrder
+      style.sortOrder ?? null
     ]
   );
 

@@ -12,4 +12,10 @@ router.post(
   uploadController.uploadImage
 );
 
+router.delete(
+  "/",
+  adminAuthMiddleware,
+  uploadController.deleteImage
+);
+
 module.exports = router;
