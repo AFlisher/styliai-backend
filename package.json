@@ -4,7 +4,8 @@
   "description": "Custom authentication backend for StyliAI",
   "main": "server.js",
   "scripts": {
-    "create-admin": "node src/utils/createAdmin.js"
+    "create-admin": "node src/utils/createAdmin.js",
+    "test": "jest"
   },
   "keywords": [],
   "author": "",
@@ -27,5 +28,8 @@
     "pg": "^8.22.0",
     "uuid": "^14.0.1",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "jest": "^30.4.2"
   }
 }
