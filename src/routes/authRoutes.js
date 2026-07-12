@@ -18,11 +18,11 @@ const authMiddleware = require('../middleware/authMiddleware');
 router.post('/register', authLimiter, authController.register);
 router.get('/verify', authController.verifyEmail);
 router.post('/login', authLimiter, authController.login);
-router.post('/refresh', authController.refreshToken);
+router.post('/refresh', authLimiter, authController.refreshToken);
 router.post('/google', authLimiter, authController.googleSignIn);
 router.post('/change-password', authLimiter, authMiddleware, authController.changePassword);
 router.post('/forgot-password', authLimiter, authController.forgotPassword);
-router.get('/status', authController.checkVerificationStatus);
+router.get('/status', authLimiter, authController.checkVerificationStatus);
 router.post('/resend-verification', authLimiter, authController.resendVerification);
 
 // Password reset routes (GET to display form, POST to submit new password)
