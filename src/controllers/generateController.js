@@ -1,41 +1,34 @@
 const generationService = require("../services/generation/generationService");
 const walletService = require("../services/wallet/walletService");
 const styleModel = require("../models/styleModel");
+const { AppError, ErrorCodes } = require("../utils/errors");
 
 /**
  * Controller to handle AI style generation requests.
  * Validates request payloads and invokes the generation orchestrator service.
  */
-async function generateImage(req, res) {
+async function generateImage(req, res, next) {
   try {
     const { styleId } = req.body;
     const userId = req.user.id;
 
     // 1. Validation checks
     if (!req.file) {
-      return res.status(400).json({
-        message: "Source image file is required."
-      });
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "Source image file is required.", 400);
     }
 
     if (!styleId) {
-      return res.status(400).json({
-        message: "styleId is required."
-      });
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "styleId is required.", 400);
     }
 
     // Look up the style early so we know its real configured cost
     // before checking balance or deducting credits.
     const style = await styleModel.getStyleById(styleId);
     if (!style) {
-      return res.status(404).json({
-        message: "Style preset not found."
-      });
+      throw new AppError(ErrorCodes.NOT_FOUND, "Style preset not found.", 404);
     }
     if (!style.isEnabled) {
-      return res.status(400).json({
-        message: "Style is disabled."
-      });
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "Style is disabled.", 400);
     }
 
     // 2. Atomically check-and-deduct BEFORE calling the AI provider. deductBalance
@@ -88,18 +81,14 @@ async function generateImage(req, res) {
     });
 
   } catch (err) {
+    if (err instanceof AppError) {
+      return next(err);
+    }
+
     console.error("AI Generation Controller Error:", err);
 
     if (err.message === "Insufficient balance") {
-      return res.status(403).json({
-        message: "Insufficient balance"
-      });
-    }
-
-    if (err.message === "Style preset not found.") {
-      return res.status(404).json({
-        message: err.message
-      });
+      return next(new AppError(ErrorCodes.INSUFFICIENT_BALANCE, "Insufficient balance", 403));
     }
 
     // Inspect if error is a Fal AI provider lockout, forbidden, or exhausted balance error
@@ -117,14 +106,10 @@ async function generateImage(req, res) {
       errorText.includes("exhausted balance") ||
       errorText.includes("user is locked")
     ) {
-      return res.status(503).json({
-        message: "Image generation service is temporarily unavailable."
-      });
+      return next(new AppError(ErrorCodes.PROVIDER_UNAVAILABLE, "Image generation service is temporarily unavailable.", 503));
     }
 
-    return res.status(500).json({
-      message: err.message || "An error occurred during image style generation."
-    });
+    return next(new AppError(ErrorCodes.INTERNAL_ERROR, err.message || "An error occurred during image style generation.", 500));
   }
 }
 

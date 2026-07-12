@@ -69,8 +69,12 @@ app.use((req, res, next) => {
 
 // Error Handling Middleware
 app.use((err, req, res, next) => {
+  if (err && err.isAppError) {
+    return res.status(err.statusCode).json({ code: err.code, message: err.message });
+  }
+
   console.error("Internal Server Error:", err);
-  res.status(500).json({ message: "An internal server error occurred." });
+  res.status(500).json({ code: "INTERNAL_ERROR", message: "An internal server error occurred." });
 });
 
 module.exports = app;

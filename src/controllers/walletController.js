@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const db = require("../config/db");
 const walletService = require("../services/wallet/walletService");
+const { AppError, ErrorCodes } = require("../utils/errors");
 
 /**
  * Helper to verify AdMob SSV signature cryptographically using Google's public keys.
@@ -53,7 +54,7 @@ async function getWalletInfo(req, res, next) {
     );
 
     if (userRes.rows.length === 0) {
-      return res.status(404).json({ message: "User not found." });
+      return next(new AppError(ErrorCodes.NOT_FOUND, "User not found.", 404));
     }
 
     const { adsProgress, generatedImages } = userRes.rows[0];
@@ -113,7 +114,7 @@ async function rewardAd(req, res, next) {
  * POST /api/wallet/reward/verify
  * Handles Server-Side Verification (SSV) callback from Google AdMob.
  */
-async function verifyRewardedAd(req, res) {
+async function verifyRewardedAd(req, res, next) {
   try {
     const {
       user_id,
@@ -129,22 +130,22 @@ async function verifyRewardedAd(req, res) {
     const userId = custom_data || user_id;
 
     if (!transactionId) {
-      return res.status(400).json({ message: "transaction_id is required." });
+      return next(new AppError(ErrorCodes.VALIDATION_ERROR, "transaction_id is required.", 400));
     }
 
     if (!userId) {
-      return res.status(400).json({ message: "user_id or custom_data is required." });
+      return next(new AppError(ErrorCodes.VALIDATION_ERROR, "user_id or custom_data is required.", 400));
     }
 
     // Signature and key_id are mandatory: reject any callback that omits them
     // instead of silently skipping verification (see Roadmap Item 1.3).
     if (!signature || !key_id) {
-      return res.status(400).json({ message: "Missing required AdMob SSV signature parameters." });
+      return next(new AppError(ErrorCodes.VALIDATION_ERROR, "Missing required AdMob SSV signature parameters.", 400));
     }
 
     const isValid = await verifyAdMobSSVSignature(req, signature, key_id);
     if (!isValid) {
-      return res.status(400).json({ message: "Invalid AdMob SSV signature" });
+      return next(new AppError(ErrorCodes.VALIDATION_ERROR, "Invalid AdMob SSV signature", 400));
     }
 
     // Check duplicate transaction_id to prevent duplicate claims
@@ -174,7 +175,7 @@ async function verifyRewardedAd(req, res) {
 
   } catch (err) {
     console.error("AdMob SSV Error:", err);
-    return res.status(500).json({ message: err.message || "Failed to verify AdMob rewarded ad." });
+    return next(new AppError(ErrorCodes.INTERNAL_ERROR, err.message || "Failed to verify AdMob rewarded ad.", 500));
   }
 }
 
