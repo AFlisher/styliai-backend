@@ -4,7 +4,7 @@ jest.mock("../../../config/db", () => ({
 }));
 
 const db = require("../../../config/db");
-const { addBalance, deductBalance, getBalance } = require("../walletService");
+const { addBalance, deductBalance, getBalance, rewardAd } = require("../walletService");
 
 function makeMockClient(queryResponses) {
   const query = jest.fn();
@@ -164,5 +164,95 @@ describe("walletService.getBalance", () => {
   it("throws when the user does not exist", async () => {
     db.query.mockResolvedValueOnce({ rows: [] });
     await expect(getBalance("missing-user")).rejects.toThrow("User not found");
+  });
+});
+
+describe("walletService.rewardAd", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("locks the user row BEFORE checking the daily limit (Roadmap Item 3.5 regression guard)", async () => {
+    // Checking the daily limit before acquiring this lock is exactly the bug
+    // a live concurrency test found: concurrent requests could all pass the
+    // check before any of them committed, granting >1 credit per day. This
+    // mock can't reproduce real Postgres locking, but it does guard against
+    // the fix (lock first, then check) being silently reverted.
+    const client = makeMockClient([
+      undefined, // BEGIN
+      { rows: [{ balance: 0, ads_progress: 0 }] }, // SELECT ... FOR UPDATE
+      { rows: [] }, // daily_rewards check (not yet claimed)
+      undefined, // UPDATE ads_progress
+      undefined, // COMMIT
+    ]);
+    db.pool.connect.mockResolvedValue(client);
+
+    await rewardAd("user-1");
+
+    const [firstCall, secondCall] = [client.query.mock.calls[1][0], client.query.mock.calls[2][0]];
+    expect(firstCall).toContain("FOR UPDATE");
+    expect(secondCall).toContain("daily_rewards");
+  });
+
+  it("increments ads_progress without granting a reward on the first ad", async () => {
+    const client = makeMockClient([
+      undefined,
+      { rows: [{ balance: 0, ads_progress: 0 }] },
+      { rows: [] },
+      undefined,
+      undefined,
+    ]);
+    db.pool.connect.mockResolvedValue(client);
+
+    const result = await rewardAd("user-1");
+
+    expect(result).toEqual({ rewarded: false, balance: 0, adsProgress: 1 });
+    expect(client.query).toHaveBeenNthCalledWith(
+      4,
+      expect.stringContaining("SET ads_progress"),
+      [1, "user-1"]
+    );
+  });
+
+  it("grants a reward and resets ads_progress on the second ad", async () => {
+    const client = makeMockClient([
+      undefined,
+      { rows: [{ balance: 0, ads_progress: 1 }] },
+      { rows: [] },
+      undefined, // UPDATE balance/ads_progress
+      undefined, // INSERT daily_rewards
+      { rows: [{ id: "txn-1" }] }, // recordTransaction
+      undefined, // COMMIT
+    ]);
+    db.pool.connect.mockResolvedValue(client);
+
+    const result = await rewardAd("user-1");
+
+    expect(result).toEqual({ rewarded: true, balance: 1, adsProgress: 0 });
+    expect(client.query).toHaveBeenNthCalledWith(
+      4,
+      expect.stringContaining("ads_progress = 0"),
+      [1, "user-1"]
+    );
+  });
+
+  it("blocks the reward once today's daily limit is already recorded", async () => {
+    const client = makeMockClient([
+      undefined,
+      { rows: [{ balance: 5, ads_progress: 0 }] },
+      { rows: [{ id: "daily-reward-row" }] }, // already claimed today
+      undefined, // COMMIT
+    ]);
+    db.pool.connect.mockResolvedValue(client);
+
+    const result = await rewardAd("user-1");
+
+    expect(result).toEqual({
+      rewarded: false,
+      dailyLimitReached: true,
+      message: "Daily free credit already claimed.",
+    });
+    // Never reaches the ads_progress increment/update once already claimed.
+    expect(client.query).toHaveBeenCalledTimes(4);
   });
 });

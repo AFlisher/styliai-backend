@@ -218,22 +218,11 @@ async function rewardAd(userId) {
   try {
     await client.query("BEGIN");
 
-    // 1. Check today's record in daily_rewards
-    const limitCheck = await client.query(
-      "SELECT id FROM daily_rewards WHERE user_id = $1 AND reward_date = CURRENT_DATE AND credits_claimed >= 1",
-      [userId]
-    );
-
-    if (limitCheck.rows.length > 0) {
-      await client.query("COMMIT");
-      return {
-        rewarded: false,
-        dailyLimitReached: true,
-        message: "Daily free credit already claimed.",
-      };
-    }
-
-    // 2. Lock the user row (FOR UPDATE)
+    // 1. Lock the user row FIRST, before checking today's daily_rewards
+    // record. Checking the limit before acquiring this lock would let
+    // concurrent requests for the same user all pass the check before any
+    // of them commits, granting more than one credit per day (Roadmap Item
+    // 3.5 - found via a live concurrency test, not theoretical).
     const userRes = await client.query(
       `
       SELECT balance, ads_progress
@@ -246,6 +235,22 @@ async function rewardAd(userId) {
 
     if (userRes.rows.length === 0) {
       throw new Error("User not found");
+    }
+
+    // 2. Check today's record in daily_rewards - now safely serialized per
+    // user by the row lock above.
+    const limitCheck = await client.query(
+      "SELECT id FROM daily_rewards WHERE user_id = $1 AND reward_date = CURRENT_DATE AND credits_claimed >= 1",
+      [userId]
+    );
+
+    if (limitCheck.rows.length > 0) {
+      await client.query("COMMIT");
+      return {
+        rewarded: false,
+        dailyLimitReached: true,
+        message: "Daily free credit already claimed.",
+      };
     }
 
     let balance = Number(userRes.rows[0].balance || 0);
