@@ -15,5 +15,7 @@ const limiter = rateLimit({
 
 router.post("/login", limiter, adminController.login);
 router.get("/stats", adminAuthMiddleware, adminStatsController.getStats);
+router.get("/users/search", adminAuthMiddleware, adminController.searchUserByEmail);
+router.post("/users/:id/adjust-balance", adminAuthMiddleware, adminController.adjustUserBalance);
 
 module.exports = router;

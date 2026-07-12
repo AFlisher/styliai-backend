@@ -183,6 +183,15 @@ components:
         generatedImageUrl: { type: string, format: uri }
       required: [success, generatedImageUrl]
 
+    AdminUserSearchResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string, nullable: true }
+        balance: { type: integer }
+      required: [id, email, fullName, balance]
+
 paths:
   /api/auth/register:
     post:
@@ -410,6 +419,56 @@ paths:
       responses:
         '200': { description: Stats, content: { application/json: { schema: { $ref: '#/components/schemas/AdminStats' } } } }
         '401': { description: Missing/invalid admin token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/admin/users/search:
+    get:
+      summary: Look up a single user by email (Roadmap Item 3.4 - manual credit adjustment tool).
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+      responses:
+        '200': { description: User found, content: { application/json: { schema: { $ref: '#/components/schemas/AdminUserSearchResult' } } } }
+        '400': { description: Missing email param, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '404': { description: No user with this email, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/admin/users/{id}/adjust-balance:
+    post:
+      summary: >
+        Manually adds (positive amount) or deducts (negative amount) credits
+        for a user, recorded as a type="admin" ledger entry (Roadmap Item
+        3.4). Deducting more than the user's balance fails with 400 rather
+        than going negative.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount: { type: integer, description: "Non-zero; positive adds, negative deducts." }
+                description: { type: string, description: "Reason for the adjustment, required." }
+              required: [amount, description]
+      responses:
+        '200':
+          description: Adjusted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  balance: { type: integer }
+                required: [balance]
+        '400': { description: Validation error or insufficient balance for a deduction, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '404': { description: User not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
   /api/categories:
     get:
