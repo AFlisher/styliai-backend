@@ -1,0 +1,709 @@
+openapi: 3.0.3
+info:
+  title: StyliAI API
+  version: "1.0.0"
+  description: >
+    Hand-authored OpenAPI contract for the StyliAI backend, written directly
+    from the actual controller/model source (not aspirational) as the single
+    source of truth for client-side type generation. Endpoints that don't
+    exist yet (e.g. POST /api/styles/preview, called by the dashboard's
+    dormant Prompt Preview UI) are intentionally NOT documented here - this
+    spec describes what the API actually does today.
+servers:
+  - url: https://styliai-backend-production.up.railway.app
+  - url: http://localhost:3000
+
+components:
+  securitySchemes:
+    userBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Regular user JWT, signed with SUPABASE_JWT_SECRET.
+    adminBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Admin JWT, signed with ADMIN_JWT_SECRET, requires role=admin.
+
+  schemas:
+    ErrorMessage:
+      type: object
+      properties:
+        message:
+          type: string
+      required: [message]
+
+    ErrorCode:
+      type: object
+      description: Structured error shape used by generateController.js and walletController.js (Roadmap Item 2.1). Other controllers still use ErrorMessage.
+      properties:
+        code:
+          type: string
+          example: INSUFFICIENT_BALANCE
+        message:
+          type: string
+      required: [code, message]
+
+    UserAuthUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        emailConfirmedAt: { type: string, format: date-time, nullable: true }
+      required: [id, email, fullName]
+
+    UserAuthResponse:
+      type: object
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        user: { $ref: '#/components/schemas/UserAuthUser' }
+      required: [accessToken, refreshToken, user]
+
+    AdminUser:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        fullName: { type: string }
+        role: { type: string, enum: [admin] }
+      required: [id, email, fullName, role]
+
+    AdminAuthResponse:
+      type: object
+      description: Admin login has no refresh token today (Roadmap Item 2.4b notes this as a fixed 12h session with no rotation).
+      properties:
+        accessToken: { type: string }
+        user: { $ref: '#/components/schemas/AdminUser' }
+      required: [accessToken, user]
+
+    Category:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        sortOrder: { type: integer }
+        isEnabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, sortOrder, isEnabled]
+
+    Style:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        categoryId: { type: string, format: uuid }
+        name: { type: string }
+        prompt: { type: string }
+        negativePrompt: { type: string, nullable: true }
+        coverImage: { type: string, nullable: true }
+        creditCost: { type: integer, minimum: 0 }
+        isTrending: { type: boolean }
+        isPremium: { type: boolean }
+        isEnabled: { type: boolean }
+        sortOrder: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, categoryId, name, prompt, negativePrompt, coverImage, creditCost, isTrending, isPremium, isEnabled, sortOrder]
+
+    WalletInfo:
+      type: object
+      properties:
+        balance: { type: integer }
+        adsProgress: { type: integer }
+        generatedImages: { type: integer }
+        dailyLimitReached: { type: boolean }
+      required: [balance, adsProgress, generatedImages, dailyLimitReached]
+
+    WalletTransaction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        amount: { type: integer }
+        type: { type: string, enum: [reward, purchase, generation, refund, admin] }
+        description: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, userId, amount, type, description, createdAt]
+
+    RewardResult:
+      type: object
+      description: Shape varies by branch - dailyLimitReached is only present when the daily free-credit limit was already hit.
+      properties:
+        rewarded: { type: boolean }
+        dailyLimitReached: { type: boolean }
+        message: { type: string }
+        balance: { type: integer }
+        adsProgress: { type: integer }
+      required: [rewarded]
+
+    AdminStats:
+      type: object
+      properties:
+        totalUsers: { type: integer }
+        activeToday:
+          type: integer
+          description: Approximation - users with any wallet activity today, not literal login sessions.
+        imagesGenerated: { type: integer }
+        creditsUsed: { type: integer }
+        storageUsedMB: { type: number }
+        chartData:
+          type: array
+          items:
+            type: object
+            properties:
+              label: { type: string }
+              value: { type: integer }
+            required: [label, value]
+        recentActivity:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              userEmail: { type: string, format: email }
+              type: { type: string, enum: [reward, purchase, generation, refund, admin] }
+              amount: { type: integer }
+              date: { type: string, format: date-time }
+            required: [id, userEmail, type, amount, date]
+      required: [totalUsers, activeToday, imagesGenerated, creditsUsed, storageUsedMB, chartData, recentActivity]
+
+    UploadResult:
+      type: object
+      properties:
+        url: { type: string, format: uri }
+      required: [url]
+
+    GenerateResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        generatedImageUrl: { type: string, format: uri }
+      required: [success, generatedImageUrl]
+
+paths:
+  /api/auth/register:
+    post:
+      summary: Register a new user (email/password), sends a verification email.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 6 }
+                fullName: { type: string }
+              required: [email, password, fullName]
+      responses:
+        '201': { description: Registered, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '400': { description: Validation error or email already registered, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '500': { description: Server error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/auth/verify:
+    get:
+      summary: Email verification link target. Renders an HTML confirmation page, not JSON.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: HTML verification result page, content: { text/html: {} } }
+        '400': { description: HTML error page (missing/invalid/expired token), content: { text/html: {} } }
+
+  /api/auth/login:
+    post:
+      summary: Email/password login.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+              required: [email, password]
+      responses:
+        '200': { description: Login success, content: { application/json: { schema: { $ref: '#/components/schemas/UserAuthResponse' } } } }
+        '401': { description: Invalid credentials, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '403': { description: Email not verified, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/auth/refresh:
+    post:
+      summary: Exchange a refresh token for a new access+refresh token pair. Rate-limited (Roadmap Item 2.3).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken: { type: string }
+              required: [refreshToken]
+      responses:
+        '200':
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accessToken: { type: string }
+                  refreshToken: { type: string }
+                required: [accessToken, refreshToken]
+        '401': { description: Invalid or expired refresh token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/auth/google:
+    post:
+      summary: Google Sign-In via server-verified ID token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                idToken: { type: string }
+              required: [idToken]
+      responses:
+        '200': { description: Sign-in success, content: { application/json: { schema: { $ref: '#/components/schemas/UserAuthResponse' } } } }
+        '401': { description: Invalid Google ID token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/auth/change-password:
+    post:
+      summary: Change the authenticated user's password.
+      security: [{ userBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 8 }
+              required: [currentPassword, newPassword]
+      responses:
+        '200': { description: Password changed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '400': { description: Validation error / wrong current password / Google account, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/auth/forgot-password:
+    post:
+      summary: >
+        Request a password reset link. Always returns the same generic
+        response regardless of whether the account exists (Roadmap Item 2.2).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+              required: [email]
+      responses:
+        '200': { description: Generic response, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/auth/status:
+    get:
+      summary: >
+        Poll email verification status. Returns {verified: false} for a
+        nonexistent account rather than a distinct 404 (Roadmap Item 2.2).
+        Rate-limited (Roadmap Item 2.3).
+      security: []
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+      responses:
+        '200':
+          description: Verification status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verified: { type: boolean }
+                required: [verified]
+        '400': { description: Missing email param, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/auth/resend-verification:
+    post:
+      summary: >
+        Resend the verification email. Always returns the same generic
+        response regardless of account existence or verification state
+        (Roadmap Item 2.2).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+              required: [email]
+      responses:
+        '200': { description: Generic response, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/auth/reset-password:
+    get:
+      summary: Renders the password-reset HTML form for a given token.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: HTML form, content: { text/html: {} } }
+        '400': { description: HTML error page, content: { text/html: {} } }
+    post:
+      summary: Submits the password-reset HTML form.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        '200': { description: HTML success/error page, content: { text/html: {} } }
+
+  /api/admin/login:
+    post:
+      summary: Admin login. Rate-limited (max 20/15min, separate from the user authLimiter).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+              required: [email, password]
+      responses:
+        '200': { description: Login success, content: { application/json: { schema: { $ref: '#/components/schemas/AdminAuthResponse' } } } }
+        '401': { description: Invalid credentials, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/admin/stats:
+    get:
+      summary: Analytics MVP stats for the dashboard (Roadmap Phase 5.9 / Dashboard Functional Plan Part 2).
+      security: [{ adminBearerAuth: [] }]
+      responses:
+        '200': { description: Stats, content: { application/json: { schema: { $ref: '#/components/schemas/AdminStats' } } } }
+        '401': { description: Missing/invalid admin token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/categories:
+    get:
+      summary: List all categories.
+      security: []
+      responses:
+        '200':
+          description: Category list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Category' } }
+    post:
+      summary: Create a category.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                isEnabled: { type: boolean, default: true }
+              required: [name]
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Duplicate name, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/categories/reorder:
+    put:
+      summary: Bulk-update category sort order.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                categories:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      sortOrder: { type: integer }
+              required: [categories]
+      responses:
+        '200': { description: Reordered, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/categories/{id}:
+    put:
+      summary: Update a category.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                isEnabled: { type: boolean }
+                sortOrder: { type: integer }
+              required: [name]
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Category' } } } }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Duplicate name, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+    delete:
+      summary: Delete a category (fails if it still contains styles).
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Deleted }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Category still has styles, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/styles:
+    get:
+      summary: List styles. Defaults to enabled-only unless all=true (used by the admin dashboard).
+      security: []
+      parameters:
+        - name: categoryId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: all
+          in: query
+          required: false
+          schema: { type: string, enum: ["true"] }
+      responses:
+        '200':
+          description: Style list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Style' } }
+    post:
+      summary: Create a style.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                categoryId: { type: string, format: uuid }
+                name: { type: string }
+                prompt: { type: string }
+                negativePrompt: { type: string, nullable: true }
+                coverImage: { type: string, nullable: true }
+                creditCost: { type: integer, minimum: 0, default: 1 }
+                isTrending: { type: boolean, default: false }
+                isPremium: { type: boolean, default: false }
+                isEnabled: { type: boolean, default: true }
+                sortOrder: { type: integer }
+              required: [categoryId, name, prompt]
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Duplicate name in category, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/styles/reorder:
+    put:
+      summary: Bulk-update style sort order.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                styles:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      sortOrder: { type: integer }
+              required: [styles]
+      responses:
+        '200': { description: Reordered, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/styles/{id}:
+    put:
+      summary: Update a style.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                categoryId: { type: string, format: uuid }
+                name: { type: string }
+                prompt: { type: string }
+                negativePrompt: { type: string, nullable: true }
+                coverImage: { type: string, nullable: true }
+                creditCost: { type: integer, minimum: 0 }
+                isTrending: { type: boolean }
+                isPremium: { type: boolean }
+                isEnabled: { type: boolean }
+                sortOrder: { type: integer }
+              required: [categoryId, name, prompt]
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Duplicate name in category, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+    delete:
+      summary: Delete a style.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Deleted }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/upload:
+    post:
+      summary: Upload a cover image to Supabase Storage.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+              required: [file]
+      responses:
+        '200': { description: Uploaded, content: { application/json: { schema: { $ref: '#/components/schemas/UploadResult' } } } }
+        '400': { description: No file / invalid type, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+    delete:
+      summary: Delete a previously-uploaded cover image by its public URL.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url: { type: string, format: uri }
+              required: [url]
+      responses:
+        '204': { description: Deleted }
+        '400': { description: Missing/invalid URL, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/generate:
+    post:
+      summary: Generate a styled image. Charges credits atomically before calling the AI provider, refunds on failure.
+      security: [{ userBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                styleId: { type: string, format: uuid }
+              required: [file, styleId]
+      responses:
+        '200': { description: Generated, content: { application/json: { schema: { $ref: '#/components/schemas/GenerateResult' } } } }
+        '400': { description: Validation error / style disabled, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+        '403': { description: Insufficient balance, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+        '404': { description: Style not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+        '503': { description: AI provider temporarily unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+
+  /api/wallet:
+    get:
+      summary: Get the authenticated user's wallet info.
+      security: [{ userBearerAuth: [] }]
+      responses:
+        '200': { description: Wallet info, content: { application/json: { schema: { $ref: '#/components/schemas/WalletInfo' } } } }
+
+  /api/wallet/history:
+    get:
+      summary: Get the authenticated user's transaction history, newest first.
+      security: [{ userBearerAuth: [] }]
+      responses:
+        '200':
+          description: Transaction history
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/WalletTransaction' } }
+
+  /api/wallet/reward:
+    post:
+      summary: Grant a reward after watching 2 rewarded ads (client-reported, not SSV-verified).
+      security: [{ userBearerAuth: [] }]
+      responses:
+        '200': { description: Reward result, content: { application/json: { schema: { $ref: '#/components/schemas/RewardResult' } } } }
+
+  /api/wallet/reward/verify:
+    post:
+      summary: >
+        AdMob Server-Side Verification callback. Public, no auth - protected by
+        mandatory signature verification instead (Roadmap Item 1.3).
+      security: []
+      responses:
+        '200':
+          description: Reward verified/processed, or a duplicate transaction acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+                  rewardResult: { $ref: '#/components/schemas/RewardResult' }
+                required: [message]
+        '400': { description: Missing params / invalid signature, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
