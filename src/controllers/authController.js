@@ -8,7 +8,10 @@ const db = require('../config/db');
 const sendEmail = require('../utils/sendEmail');
 const { renderVerificationPage, renderResetPasswordPage } = require('../utils/htmlTemplates');
 
-const GOOGLE_CLIENT_ID = '393948547098-qji62u4235f83e72eio9vi1fp4a9lmu9.apps.googleusercontent.com';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID;
+if (!GOOGLE_CLIENT_ID) {
+  console.error("GOOGLE_WEB_CLIENT_ID is not configured — Google sign-in will not work.");
+}
 const googleOAuth2Client = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // Helper to hash tokens with SHA-256 for secure database storage
