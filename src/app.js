@@ -26,11 +26,17 @@ app.use(helmet({
   }
 }));
 
-const allowedOrigins = [
+// Comma-separated list of allowed origins, configurable per-environment so new
+// preview/staging deployments don't require a backend code change.
+const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "https://styliai-admin-dashboard-z8it.vercel.app",
   "https://styliai-admin-dashboard.vercel.app",
 ];
+
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
+  : DEFAULT_ALLOWED_ORIGINS;
 
 app.use(cors({
   origin: function (origin, callback) {
