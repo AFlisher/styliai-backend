@@ -192,6 +192,27 @@ components:
         balance: { type: integer }
       required: [id, email, fullName, balance]
 
+    CreditPack:
+      type: object
+      description: >
+        Roadmap Item 4.3. productId is intentionally nullable - no real
+        RevenueCat/App Store/Google Play products exist yet (Item 4.1, not
+        started). It must not be treated as a real product identifier until
+        that item actually configures one.
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        credits: { type: integer, minimum: 1 }
+        priceDisplay: { type: string, example: "$4.99" }
+        badge: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        isEnabled: { type: boolean }
+        sortOrder: { type: integer }
+        productId: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, credits, priceDisplay, isEnabled, sortOrder, productId]
+
 paths:
   /api/auth/register:
     post:
@@ -766,3 +787,81 @@ paths:
                   rewardResult: { $ref: '#/components/schemas/RewardResult' }
                 required: [message]
         '400': { description: Missing params / invalid signature, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+
+  /api/credit-packs:
+    get:
+      summary: List credit packs. Defaults to enabled-only unless all=true (used by the admin dashboard).
+      security: []
+      parameters:
+        - name: all
+          in: query
+          required: false
+          schema: { type: string, enum: ["true"] }
+      responses:
+        '200':
+          description: Credit pack list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/CreditPack' } }
+    post:
+      summary: Create a credit pack.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                credits: { type: integer, minimum: 1 }
+                priceDisplay: { type: string }
+                badge: { type: string, nullable: true }
+                description: { type: string, nullable: true }
+                isEnabled: { type: boolean, default: true }
+                sortOrder: { type: integer }
+              required: [name, credits, priceDisplay]
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/CreditPack' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Duplicate name, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/credit-packs/{id}:
+    put:
+      summary: Update a credit pack.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                credits: { type: integer, minimum: 1 }
+                priceDisplay: { type: string }
+                badge: { type: string, nullable: true }
+                description: { type: string, nullable: true }
+                isEnabled: { type: boolean }
+                sortOrder: { type: integer }
+              required: [name, credits, priceDisplay]
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/CreditPack' } } } }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Duplicate name, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+    delete:
+      summary: Delete a credit pack.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Deleted }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }

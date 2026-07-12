@@ -10,6 +10,7 @@ const styleRoutes = require("./routes/styleRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
 const generateRoutes = require("./routes/generateRoutes");
 const walletRoutes = require("./routes/walletRoutes");
+const creditPackRoutes = require("./routes/creditPackRoutes");
 
 const app = express();
 
@@ -62,6 +63,7 @@ app.use('/api/styles', styleRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/generate', generateRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/credit-packs', creditPackRoutes);
 
 // Default endpoint
 app.get('/', (req, res) => {

@@ -71,6 +71,13 @@ async function runMigration() {
       console.log("✅ Wallet transaction type fix migration completed successfully!");
     }
 
+    const creditPacksSqlPath = path.join(__dirname, '../../migration_credit_packs.sql');
+    if (fs.existsSync(creditPacksSqlPath)) {
+      const creditPacksSql = fs.readFileSync(creditPacksSqlPath, 'utf8');
+      await client.query(creditPacksSql);
+      console.log("✅ Credit packs migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);
