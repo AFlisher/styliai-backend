@@ -317,47 +317,47 @@ async function forgotPassword(req, res) {
     const validated = forgotPasswordSchema.parse(req.body);
 
     const userRes = await db.query('SELECT id, full_name FROM public.users WHERE email = $1', [validated.email.toLowerCase()]);
-    
-    // Check if user exists
-    if (userRes.rows.length === 0) {
-      return res.status(404).json({ message: "No account found with this email." });
+
+    // Only generate a token and send an email if the account actually exists,
+    // but respond identically either way below so this endpoint can't be used
+    // to enumerate registered emails.
+    if (userRes.rows.length > 0) {
+      const user = userRes.rows[0];
+      const resetToken = uuidv4();
+      const resetTokenHash = hashToken(resetToken);
+      // Link expires in 1 hour
+      const expiresAt = new Date(Date.now() + 3600 * 1000);
+
+      await db.query(
+        'UPDATE public.users SET reset_token_hash = $1, reset_token_expires_at = $2 WHERE id = $3',
+        [resetTokenHash, expiresAt, user.id]
+      );
+
+      const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
+      const resetLink = `${backendUrl}/api/auth/reset-password?token=${resetToken}`;
+
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
+          <h2 style="color: #E735F6; text-align: center;">Reset Your Password</h2>
+          <p>Hello ${user.full_name},</p>
+          <p>We received a request to reset your password. Click the button below to choose a new password. This link is valid for 1 hour.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; box-shadow: 0 4px 15px rgba(231, 53, 246, 0.4);">Reset Password</a>
+          </div>
+          <p style="color: #8A8A9D; font-size: 13px;">If you did not request a password reset, please ignore this email.</p>
+          <hr style="border-color: #1E1E2F; margin: 20px 0;" />
+          <p style="font-size: 11px; color: #8A8A9D; text-align: center;">StyliAI — Apply Stunning Photo Styles</p>
+        </div>
+      `;
+
+      await sendEmail({
+        to: validated.email.toLowerCase(),
+        subject: "Reset your password - StyliAI",
+        html: emailHtml
+      });
     }
 
-    const user = userRes.rows[0];
-    const resetToken = uuidv4();
-    const resetTokenHash = hashToken(resetToken);
-    // Link expires in 1 hour
-    const expiresAt = new Date(Date.now() + 3600 * 1000);
-
-    await db.query(
-      'UPDATE public.users SET reset_token_hash = $1, reset_token_expires_at = $2 WHERE id = $3',
-      [resetTokenHash, expiresAt, user.id]
-    );
-
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
-    const resetLink = `${backendUrl}/api/auth/reset-password?token=${resetToken}`;
-
-    const emailHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
-        <h2 style="color: #E735F6; text-align: center;">Reset Your Password</h2>
-        <p>Hello ${user.full_name},</p>
-        <p>We received a request to reset your password. Click the button below to choose a new password. This link is valid for 1 hour.</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${resetLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; box-shadow: 0 4px 15px rgba(231, 53, 246, 0.4);">Reset Password</a>
-        </div>
-        <p style="color: #8A8A9D; font-size: 13px;">If you did not request a password reset, please ignore this email.</p>
-        <hr style="border-color: #1E1E2F; margin: 20px 0;" />
-        <p style="font-size: 11px; color: #8A8A9D; text-align: center;">StyliAI — Apply Stunning Photo Styles</p>
-      </div>
-    `;
-
-    await sendEmail({
-      to: validated.email.toLowerCase(),
-      subject: "Reset your password - StyliAI",
-      html: emailHtml
-    });
-
-    res.json({ message: "Reset email sent." });
+    res.json({ message: "If an account with this email exists, a password reset link has been sent." });
 
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -485,11 +485,10 @@ async function checkVerificationStatus(req, res) {
       [email.toLowerCase()]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: "User not found." });
-    }
-
-    res.json({ verified: result.rows[0].email_verified });
+    // Non-existent accounts report as unverified rather than a distinct 404,
+    // so this endpoint can't be used to enumerate registered emails.
+    const verified = result.rows.length > 0 ? result.rows[0].email_verified : false;
+    res.json({ verified });
   } catch (err) {
     console.error("Check status error:", err);
     res.status(500).json({ message: "Server error." });
@@ -509,43 +508,41 @@ async function resendVerification(req, res) {
       [email.toLowerCase()]
     );
 
-    if (userRes.rows.length === 0) {
-      return res.status(404).json({ message: "User not found." });
-    }
+    // Only send an email if the account exists and is still unverified, but
+    // respond identically in every other case (nonexistent account, already
+    // verified) so this endpoint can't be used to enumerate registered emails
+    // or their verification status.
+    if (userRes.rows.length > 0 && !userRes.rows[0].email_verified) {
+      const user = userRes.rows[0];
+      const token = user.verification_token || uuidv4();
+      if (!user.verification_token) {
+        await db.query('UPDATE public.users SET verification_token = $1 WHERE id = $2', [token, user.id]);
+      }
 
-    const user = userRes.rows[0];
-    if (user.email_verified) {
-      return res.status(400).json({ message: "Email is already verified." });
-    }
+      const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
+      const verificationLink = `${backendUrl}/api/auth/verify?token=${token}`;
 
-    const token = user.verification_token || uuidv4();
-    if (!user.verification_token) {
-      await db.query('UPDATE public.users SET verification_token = $1 WHERE id = $2', [token, user.id]);
-    }
-
-    const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
-    const verificationLink = `${backendUrl}/api/auth/verify?token=${token}`;
-
-    const emailHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
-        <h2 style="color: #A855F7; text-align: center;">Verify Your Email</h2>
-        <p>Hello ${user.full_name},</p>
-        <p>Please confirm your email address by clicking the button below:</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${verificationLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Verify Email Address</a>
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
+          <h2 style="color: #A855F7; text-align: center;">Verify Your Email</h2>
+          <p>Hello ${user.full_name},</p>
+          <p>Please confirm your email address by clicking the button below:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${verificationLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Verify Email Address</a>
+          </div>
+          <hr style="border-color: #1E1E2F; margin: 20px 0;" />
+          <p style="font-size: 11px; color: #8A8A9D; text-align: center;">StyliAI — Apply Stunning Photo Styles</p>
         </div>
-        <hr style="border-color: #1E1E2F; margin: 20px 0;" />
-        <p style="font-size: 11px; color: #8A8A9D; text-align: center;">StyliAI — Apply Stunning Photo Styles</p>
-      </div>
-    `;
+      `;
 
-    await sendEmail({
-      to: email.toLowerCase(),
-      subject: "Verify your email - StyliAI",
-      html: emailHtml
-    });
+      await sendEmail({
+        to: email.toLowerCase(),
+        subject: "Verify your email - StyliAI",
+        html: emailHtml
+      });
+    }
 
-    res.json({ message: "Verification link resent successfully." });
+    res.json({ message: "If an account with this email exists and is unverified, a verification link has been sent." });
 
   } catch (err) {
     console.error("Resend verification error:", err);
