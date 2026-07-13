@@ -65,6 +65,54 @@ async function getStyles(filters = {}) {
   return result.rows;
 }
 
+/**
+ * Public-facing style list: an explicit column allowlist rather than a
+ * blocklist, so `prompt`/`negativePrompt` (and any future sensitive
+ * generation-config column) are never pulled out of Postgres for this path -
+ * not just stripped from the response afterward. Used by GET /api/styles
+ * whenever the caller doesn't present a valid admin token (see
+ * styleController.getStyles + middleware/adminAuthMiddleware.optionalAdminAuth).
+ */
+async function getPublicStyles(filters = {}) {
+  let query = `
+    SELECT
+      id,
+      category_id AS "categoryId",
+      name,
+      cover_image AS "coverImage",
+      credit_cost AS "creditCost",
+      is_trending AS "isTrending",
+      is_premium AS "isPremium",
+      is_enabled AS "isEnabled",
+      sort_order AS "sortOrder",
+      created_at AS "createdAt",
+      updated_at AS "updatedAt"
+    FROM styles
+  `;
+
+  const whereClauses = [];
+  const params = [];
+
+  if (filters.categoryId) {
+    params.push(filters.categoryId);
+    whereClauses.push(`category_id = $${params.length}`);
+  }
+
+  if (filters.isEnabled !== undefined) {
+    params.push(filters.isEnabled);
+    whereClauses.push(`is_enabled = $${params.length}`);
+  }
+
+  if (whereClauses.length > 0) {
+    query += ` WHERE ${whereClauses.join(' AND ')}`;
+  }
+
+  query += ` ORDER BY sort_order ASC, created_at ASC`;
+
+  const result = await db.query(query, params);
+  return result.rows;
+}
+
 async function getStyleById(id) {
   const result = await db.query(
     `
@@ -236,6 +284,7 @@ async function reorderStyles(styles) {
 module.exports = {
   getAllStyles,
   getStyles,
+  getPublicStyles,
   getStyleById,
   createStyle,
   updateStyle,

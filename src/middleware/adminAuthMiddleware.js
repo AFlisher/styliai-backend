@@ -38,4 +38,50 @@ function adminAuthMiddleware(req, res, next) {
   }
 }
 
+/**
+ * Non-rejecting variant for routes that serve both the public mobile app and
+ * the Admin Dashboard from the same endpoint (e.g. GET /api/styles). Attaches
+ * `req.admin` when a valid admin token is present, exactly like the strict
+ * middleware - but a missing/invalid/malformed token just falls through to
+ * `next()` instead of failing the request, so the route handler can shape its
+ * response based on whether `req.admin` was set.
+ */
+function optionalAdminAuth(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) {
+    return next();
+  }
+
+  const parts = authHeader.split(' ');
+  if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    return next();
+  }
+
+  const token = parts[1];
+
+  try {
+    const secret = process.env.ADMIN_JWT_SECRET;
+    if (!secret) {
+      return next();
+    }
+
+    const decoded = jwt.verify(token, secret);
+
+    if (decoded.role === 'admin') {
+      req.admin = {
+        id: decoded.sub,
+        email: decoded.email,
+        role: decoded.role
+      };
+    }
+
+    next();
+  } catch (err) {
+    // Not a valid admin token (e.g. a mobile user's Supabase JWT) - treat as
+    // an unauthenticated request rather than rejecting it.
+    next();
+  }
+}
+
 module.exports = adminAuthMiddleware;
+module.exports.optionalAdminAuth = optionalAdminAuth;

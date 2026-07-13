@@ -3,8 +3,9 @@ const router = express.Router();
 
 const styleController = require("../controllers/styleController");
 const adminAuthMiddleware = require("../middleware/adminAuthMiddleware");
+const { optionalAdminAuth } = require("../middleware/adminAuthMiddleware");
 
-router.get("/", styleController.getStyles);
+router.get("/", optionalAdminAuth, styleController.getStyles);
 router.post("/", adminAuthMiddleware, styleController.createStyle);
 router.put("/reorder", adminAuthMiddleware, styleController.reorderStyles);
 router.put("/:id", adminAuthMiddleware, styleController.updateStyle);

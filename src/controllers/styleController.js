@@ -8,13 +8,19 @@ async function getStyles(req, res) {
     if (categoryId) {
       filters.categoryId = categoryId;
     }
-    
+
     // Only return enabled styles by default, unless requested otherwise (e.g. by Admin dashboard)
     if (all !== "true") {
       filters.isEnabled = true;
     }
 
-    const styles = await styleModel.getStyles(filters);
+    // req.admin is only set by optionalAdminAuth when a valid admin token was
+    // presented (the Admin Dashboard always sends one). Anyone else -
+    // including the mobile app, which never holds an admin token - gets the
+    // public DTO with no prompt/negativePrompt/generation-config fields.
+    const styles = req.admin
+      ? await styleModel.getStyles(filters)
+      : await styleModel.getPublicStyles(filters);
     res.json(styles);
   } catch (err) {
     console.error(err);
