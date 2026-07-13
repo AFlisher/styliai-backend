@@ -1,6 +1,7 @@
 const generationService = require("../services/generation/generationService");
 const walletService = require("../services/wallet/walletService");
 const styleModel = require("../models/styleModel");
+const creationsModel = require("../models/creationsModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
 
 /**
@@ -74,7 +75,21 @@ async function generateImage(req, res, next) {
       throw genErr;
     }
 
-    // 4. Return JSON payload
+    // 4. Record this in the user's creation history. Best-effort: the user
+    // already paid credits and has a real generated image back, so a
+    // history-write hiccup must never fail an otherwise-successful response.
+    try {
+      await creationsModel.addCreation({
+        userId,
+        styleId,
+        styleName: style.name,
+        imageUrl: generatedImageUrl,
+      });
+    } catch (creationErr) {
+      console.error("[generateImage] Failed to record creation history:", creationErr.message);
+    }
+
+    // 5. Return JSON payload
     return res.status(200).json({
       success: true,
       generatedImageUrl

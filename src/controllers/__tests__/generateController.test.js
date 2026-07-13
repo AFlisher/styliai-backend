@@ -11,10 +11,14 @@ jest.mock("../../services/wallet/walletService", () => ({
 jest.mock("../../models/styleModel", () => ({
   getStyleById: jest.fn(),
 }));
+jest.mock("../../models/creationsModel", () => ({
+  addCreation: jest.fn(),
+}));
 
 const generationService = require("../../services/generation/generationService");
 const walletService = require("../../services/wallet/walletService");
 const styleModel = require("../../models/styleModel");
+const creationsModel = require("../../models/creationsModel");
 const { generateImage } = require("../generateController");
 
 function makeReqRes({ file = { buffer: Buffer.from("x") }, styleId = "style-1" } = {}) {
@@ -28,7 +32,7 @@ function makeReqRes({ file = { buffer: Buffer.from("x") }, styleId = "style-1" }
   return { req, res, next };
 }
 
-const ENABLED_STYLE = { id: "style-1", creditCost: 2, isEnabled: true };
+const ENABLED_STYLE = { id: "style-1", name: "Test Style", creditCost: 2, isEnabled: true };
 
 describe("generateController.generateImage", () => {
   beforeEach(() => {
@@ -37,6 +41,7 @@ describe("generateController.generateImage", () => {
     walletService.deductBalance.mockResolvedValue(8);
     walletService.addBalance.mockResolvedValue(10);
     generationService.generate.mockResolvedValue("https://example.com/generated.png");
+    creationsModel.addCreation.mockResolvedValue({ id: "creation-1" });
     jest.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -58,6 +63,26 @@ describe("generateController.generateImage", () => {
     expect(walletService.deductBalance).toHaveBeenCalledWith("user-1", 2, "generation", "Image generated");
     expect(generationService.generate).toHaveBeenCalledTimes(1);
     expect(walletService.addBalance).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+    expect(creationsModel.addCreation).toHaveBeenCalledWith({
+      userId: "user-1",
+      styleId: "style-1",
+      styleName: "Test Style",
+      imageUrl: "https://example.com/generated.png",
+    });
+  });
+
+  it("still returns 200 with the generated URL even if recording creation history fails", async () => {
+    creationsModel.addCreation.mockRejectedValue(new Error("db hiccup"));
+    const { req, res, next } = makeReqRes();
+
+    await generateImage(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      generatedImageUrl: "https://example.com/generated.png",
+    });
     expect(next).not.toHaveBeenCalled();
   });
 

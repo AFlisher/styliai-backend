@@ -78,6 +78,20 @@ async function runMigration() {
       console.log("✅ Credit packs migration completed successfully!");
     }
 
+    const favoritesSqlPath = path.join(__dirname, '../../migration_favorites.sql');
+    if (fs.existsSync(favoritesSqlPath)) {
+      const favoritesSql = fs.readFileSync(favoritesSqlPath, 'utf8');
+      await client.query(favoritesSql);
+      console.log("✅ Favorites migration completed successfully!");
+    }
+
+    const creationsSqlPath = path.join(__dirname, '../../migration_creations.sql');
+    if (fs.existsSync(creationsSqlPath)) {
+      const creationsSql = fs.readFileSync(creationsSqlPath, 'utf8');
+      await client.query(creationsSql);
+      console.log("✅ Creations migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);

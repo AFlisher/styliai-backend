@@ -11,6 +11,8 @@ const uploadRoutes = require("./routes/uploadRoutes");
 const generateRoutes = require("./routes/generateRoutes");
 const walletRoutes = require("./routes/walletRoutes");
 const creditPackRoutes = require("./routes/creditPackRoutes");
+const favoritesRoutes = require("./routes/favoritesRoutes");
+const creationsRoutes = require("./routes/creationsRoutes");
 
 const app = express();
 
@@ -64,6 +66,8 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/generate', generateRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/credit-packs', creditPackRoutes);
+app.use('/api/favorites', favoritesRoutes);
+app.use('/api/creations', creationsRoutes);
 
 // Default endpoint
 app.get('/', (req, res) => {
