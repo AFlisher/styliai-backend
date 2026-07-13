@@ -2,7 +2,7 @@ const styleModel = require("../models/styleModel");
 
 async function getStyles(req, res) {
   try {
-    const { categoryId, all } = req.query;
+    const { categoryId, all, trending } = req.query;
 
     const filters = {};
     if (categoryId) {
@@ -12,6 +12,15 @@ async function getStyles(req, res) {
     // Only return enabled styles by default, unless requested otherwise (e.g. by Admin dashboard)
     if (all !== "true") {
       filters.isEnabled = true;
+    }
+
+    // ?trending=true powers the Home screen's dynamic Trending section: every
+    // enabled style flagged isTrending, regardless of category. There is no
+    // dedicated Trending category - this is a filtered read of the same
+    // styles rows used everywhere else, so a style stays in its real
+    // category and nothing is duplicated.
+    if (trending === "true") {
+      filters.isTrending = true;
     }
 
     // req.admin is only set by optionalAdminAuth when a valid admin token was

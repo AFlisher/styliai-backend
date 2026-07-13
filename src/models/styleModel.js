@@ -55,6 +55,11 @@ async function getStyles(filters = {}) {
     whereClauses.push(`is_enabled = $${params.length}`);
   }
 
+  if (filters.isTrending !== undefined) {
+    params.push(filters.isTrending);
+    whereClauses.push(`is_trending = $${params.length}`);
+  }
+
   if (whereClauses.length > 0) {
     query += ` WHERE ${whereClauses.join(' AND ')}`;
   }
@@ -101,6 +106,11 @@ async function getPublicStyles(filters = {}) {
   if (filters.isEnabled !== undefined) {
     params.push(filters.isEnabled);
     whereClauses.push(`is_enabled = $${params.length}`);
+  }
+
+  if (filters.isTrending !== undefined) {
+    params.push(filters.isTrending);
+    whereClauses.push(`is_trending = $${params.length}`);
   }
 
   if (whereClauses.length > 0) {

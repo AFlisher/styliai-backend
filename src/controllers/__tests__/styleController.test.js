@@ -64,4 +64,22 @@ describe("styleController.getStyles - public/admin DTO split", () => {
 
     expect(styleModel.getStyles).toHaveBeenCalledWith({});
   });
+
+  it("?trending=true adds isTrending to the filters, still scoped to enabled styles", async () => {
+    const { req, res } = makeReqRes({});
+    req.query = { trending: "true" };
+
+    await getStyles(req, res);
+
+    expect(styleModel.getPublicStyles).toHaveBeenCalledWith({ isEnabled: true, isTrending: true });
+  });
+
+  it("ignores trending param when it isn't exactly 'true'", async () => {
+    const { req, res } = makeReqRes({});
+    req.query = { trending: "yes" };
+
+    await getStyles(req, res);
+
+    expect(styleModel.getPublicStyles).toHaveBeenCalledWith({ isEnabled: true });
+  });
 });
