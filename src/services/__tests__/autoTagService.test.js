@@ -183,7 +183,7 @@ describe("suggestTagsForStyle", () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("rate limited (429)"));
   });
 
-  it("gives up after exhausting retries on persistent 429s and reports status 'error'", async () => {
+  it("gives up after exhausting retries on persistent 429s and reports status 'error' when no fallback is configured", async () => {
     mockGenerateContent.mockRejectedValue(rateLimitError());
 
     const result = await autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" });
@@ -191,6 +191,40 @@ describe("suggestTagsForStyle", () => {
     expect(result.status).toBe("error");
     // Initial attempt + MAX_RATE_LIMIT_RETRIES retries.
     expect(mockGenerateContent).toHaveBeenCalledTimes(6);
+  });
+
+  it("falls back to GEMINI_TAGGING_FALLBACK_MODEL when the primary model is persistently rate-limited (429), same as a persistent 503", async () => {
+    process.env.GEMINI_TAGGING_FALLBACK_MODEL = "fallback-model";
+    // Primary exhausts its full retry budget (initial + MAX_RATE_LIMIT_RETRIES = 6 calls), then the fallback succeeds.
+    for (let i = 0; i < 6; i++) {
+      mockGenerateContent.mockRejectedValueOnce(rateLimitError());
+    }
+    mockGenerateContent.mockResolvedValueOnce({ text: JSON.stringify({ tagNames: ["Cyberpunk"], newTagSuggestion: null }) });
+
+    const result = await autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" });
+
+    expect(result.status).toBe("ok");
+    expect(result.tagIds).toEqual(["t1"]);
+    expect(result.modelUsed).toBe("fallback-model");
+    expect(mockGenerateContent).toHaveBeenCalledTimes(7);
+    expect(mockGenerateContent.mock.calls[6][0].model).toBe("fallback-model");
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('exhausted (429) after retry - falling back to "fallback-model"'));
+
+    delete process.env.GEMINI_TAGGING_FALLBACK_MODEL;
+  });
+
+  it("reports status 'error' (left pending) when both primary and fallback are persistently rate-limited", async () => {
+    process.env.GEMINI_TAGGING_FALLBACK_MODEL = "fallback-model";
+    mockGenerateContent.mockRejectedValue(rateLimitError());
+
+    const result = await autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" });
+
+    expect(result.status).toBe("error");
+    expect(result.tagIds).toEqual([]);
+    // primary: 6 attempts, fallback: 6 attempts.
+    expect(mockGenerateContent).toHaveBeenCalledTimes(12);
+
+    delete process.env.GEMINI_TAGGING_FALLBACK_MODEL;
   });
 
   it("does not retry a non-429 error", async () => {

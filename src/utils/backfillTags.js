@@ -3,11 +3,17 @@
  * hasn't been manually curated, using the exact same autoTagService pipeline
  * styleController.createStyle/updateStyle use - not a separate heuristic.
  *
- * Safe to re-run: a style that already has style_tags rows drops out of the
- * selection automatically, so killing this mid-run and re-invoking later
- * just resumes. A style that legitimately got zero tags (Gemini found no
- * fit, or a transient classification error) naturally stays eligible and
- * gets retried on the next run too.
+ * Safe to re-run and idempotent: a style that already has style_tags rows
+ * drops out of the selection automatically, so killing this mid-run and
+ * re-invoking later just resumes.
+ *
+ * status: 'ok' or 'empty' (Gemini genuinely classified it, even if to zero
+ * tags) is a real result and gets written. status: 'error' - both the
+ * primary and fallback model exhausted (quota/overload) or some other
+ * classification failure - is left completely untouched: no write at all,
+ * so the style has no style_tags rows and stays in the selection for the
+ * next run instead of being permanently marked "done" with nothing to show
+ * for it.
  *
  * Usage:
  *   node src/utils/backfillTags.js [--dry-run] [--limit=N]
@@ -32,7 +38,7 @@ function parseArgs(argv) {
 /** Bounded-concurrency worker pool - no new dependency for a one-off script. */
 async function runWithConcurrency(items, concurrency, worker) {
   let index = 0;
-  let errorCount = 0;
+  let crashCount = 0;
 
   async function next() {
     while (index < items.length) {
@@ -40,7 +46,7 @@ async function runWithConcurrency(items, concurrency, worker) {
       try {
         await worker(current);
       } catch (err) {
-        errorCount++;
+        crashCount++;
         console.error(`[backfillTags] Failed to process style ${current.id} (${current.name}):`, err.message);
       }
     }
@@ -48,7 +54,7 @@ async function runWithConcurrency(items, concurrency, worker) {
 
   const workerCount = Math.min(concurrency, items.length) || 0;
   await Promise.all(Array.from({ length: workerCount }, () => next()));
-  return { errorCount };
+  return { crashCount };
 }
 
 async function main() {
@@ -65,7 +71,11 @@ async function main() {
   console.log(`[backfillTags] ${targets.length} style(s) need tagging${dryRun ? " (dry run - no writes)" : ""}.`);
 
   let processed = 0;
-  const { errorCount } = await runWithConcurrency(targets, CONCURRENCY, async (style) => {
+  let taggedCount = 0;
+  let emptyCount = 0;
+  let pendingCount = 0;
+
+  const { crashCount } = await runWithConcurrency(targets, CONCURRENCY, async (style) => {
     const suggestion = await autoTagService.suggestTagsForStyle({
       name: style.name,
       prompt: style.prompt,
@@ -78,13 +88,30 @@ async function main() {
       `[backfillTags] (${processed}/${targets.length}) "${style.name}" -> ${suggestion.status} [${suggestion.tagIds.length} tag(s)]${modelNote}`
     );
 
+    if (suggestion.status === "error") {
+      // Both models exhausted (or some other classification failure) -
+      // leave this style completely untouched rather than mark it "done"
+      // with nothing to show for it. It has no style_tags rows, so it
+      // stays in getStylesNeedingAutoTag()'s selection for the next run.
+      pendingCount++;
+      return;
+    }
+
+    if (suggestion.tagIds.length > 0) {
+      taggedCount++;
+    } else {
+      emptyCount++;
+    }
+
     if (!dryRun) {
       await styleModel.setStyleTagsAutoAssigned(style.id, suggestion.tagIds);
     }
   });
 
-  console.log(`[backfillTags] Done. ${targets.length - errorCount} processed, ${errorCount} failed.`);
-  process.exitCode = errorCount > 0 ? 1 : 0;
+  console.log(
+    `[backfillTags] Done. ${taggedCount} tagged, ${emptyCount} classified with no fitting tag, ${pendingCount} left pending (both models exhausted - will retry next run), ${crashCount} crashed.`
+  );
+  process.exitCode = crashCount > 0 ? 1 : 0;
 }
 
 main()
