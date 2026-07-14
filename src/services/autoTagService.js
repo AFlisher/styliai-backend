@@ -32,9 +32,14 @@ const PROMPT_EXCERPT_LENGTH = 2000;
 let aiClient = null;
 function getClient() {
   if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
+    // Dedicated key for text classification - deliberately separate from
+    // GEMINI_API_KEY (used by services/generation/geminiProvider.js, the
+    // dormant image-generation provider; IMAGE_PROVIDER=fal is what's
+    // actually active in production) so this feature's quota/billing never
+    // gets entangled with that one.
+    const apiKey = process.env.GEMINI_TAGGING_API_KEY;
     if (!apiKey) {
-      throw new Error("[autoTagService] GEMINI_API_KEY is not defined in environment variables.");
+      throw new Error("[autoTagService] GEMINI_TAGGING_API_KEY is not defined in environment variables.");
     }
     aiClient = new GoogleGenAI({ apiKey });
   }
