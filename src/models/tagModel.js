@@ -24,6 +24,25 @@ async function getAllTags() {
   return result.rows;
 }
 
+async function getTagBySlug(slug) {
+  const result = await db.query(
+    `
+    SELECT
+      id,
+      name,
+      slug,
+      is_enabled AS "isEnabled",
+      created_at AS "createdAt",
+      updated_at AS "updatedAt"
+    FROM tags
+    WHERE slug = $1
+    `,
+    [slug]
+  );
+
+  return result.rows[0];
+}
+
 async function createTag({ name, isEnabled = true }) {
   const result = await db.query(
     `
@@ -77,7 +96,9 @@ async function deleteTag(id) {
 }
 
 module.exports = {
+  slugify,
   getAllTags,
+  getTagBySlug,
   createTag,
   updateTag,
   deleteTag,

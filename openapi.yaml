@@ -115,6 +115,9 @@ components:
           type: array
           items: { type: string, format: uuid }
           description: Admin-only. Curated tag ids assigned to this style, used by RecommendationService.
+        tagsAutoAssigned:
+          type: boolean
+          description: Admin-only. True if tagIds was last set by autoTagService rather than a manual dashboard edit - controls whether a future save re-runs classification or preserves a manual override.
       required: [id, categoryId, name, prompt, negativePrompt, coverImage, creditCost, isTrending, isPremium, isEnabled, sortOrder]
 
     Tag:
@@ -655,6 +658,11 @@ paths:
                   type: array
                   items: { type: string, format: uuid }
                   default: []
+                  description: Ignored unless autoAssignTags is explicitly false.
+                autoAssignTags:
+                  type: boolean
+                  default: true
+                  description: When true (default), tagIds is computed by autoTagService from name/prompt/category and any client-sent tagIds is ignored. Set false to use tagIds as a manual override.
               required: [categoryId, name, prompt]
       responses:
         '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
@@ -734,6 +742,10 @@ paths:
                 tagIds:
                   type: array
                   items: { type: string, format: uuid }
+                  description: Used verbatim only when autoAssignTags is false; otherwise ignored.
+                autoAssignTags:
+                  type: boolean
+                  description: Omit to leave existing tags untouched (e.g. quick isTrending/isPremium/isEnabled toggles). true re-runs autoTagService using this request's name/prompt/category; false stores tagIds as a manual override.
               required: [categoryId, name, prompt]
       responses:
         '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
