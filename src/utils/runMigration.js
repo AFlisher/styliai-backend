@@ -106,6 +106,13 @@ async function runMigration() {
       console.log("✅ Personalization migration completed successfully!");
     }
 
+    const seedTagsSqlPath = path.join(__dirname, '../../migration_seed_tags.sql');
+    if (fs.existsSync(seedTagsSqlPath)) {
+      const seedTagsSql = fs.readFileSync(seedTagsSqlPath, 'utf8');
+      await client.query(seedTagsSql);
+      console.log("✅ Seed tags migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);
