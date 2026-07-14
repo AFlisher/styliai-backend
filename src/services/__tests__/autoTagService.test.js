@@ -32,7 +32,7 @@ function mockResponseText(obj) {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  process.env.GEMINI_API_KEY = "test-key";
+  process.env.GEMINI_TAGGING_API_KEY = "test-key";
   tagModel.getAllTags.mockResolvedValue(TAGS);
   jest.spyOn(console, "error").mockImplementation(() => {});
 });
