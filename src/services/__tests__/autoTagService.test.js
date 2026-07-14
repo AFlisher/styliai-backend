@@ -32,9 +32,16 @@ function mockResponseText(obj) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.useRealTimers();
   process.env.GEMINI_TAGGING_API_KEY = "test-key";
+  process.env.GEMINI_TAGGING_MODEL = "test-model";
   tagModel.getAllTags.mockResolvedValue(TAGS);
   jest.spyOn(console, "error").mockImplementation(() => {});
+  jest.spyOn(console, "warn").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  console.warn.mockRestore();
 });
 
 afterEach(() => {
@@ -149,6 +156,51 @@ describe("suggestTagsForStyle", () => {
     const result = await autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" });
 
     expect(result.status).toBe("error");
+  });
+
+  function rateLimitError(retryDelaySeconds = "0.01") {
+    return new Error(JSON.stringify({
+      error: {
+        code: 429,
+        status: "RESOURCE_EXHAUSTED",
+        details: [
+          {
+            "@type": "type.googleapis.com/google.rpc.RetryInfo",
+            retryDelay: `${retryDelaySeconds}s`,
+          },
+        ],
+      },
+    }));
+  }
+
+  it("retries a 429 using Google's suggested retryDelay and succeeds once quota frees up", async () => {
+    mockGenerateContent.mockRejectedValueOnce(rateLimitError());
+    mockResponseText({ tagNames: ["Cyberpunk"], newTagSuggestion: null });
+
+    const result = await autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" });
+
+    expect(result.tagIds).toEqual(["t1"]);
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("Rate limited (429)"));
+  });
+
+  it("gives up after exhausting retries on persistent 429s and reports status 'error'", async () => {
+    mockGenerateContent.mockRejectedValue(rateLimitError());
+
+    const result = await autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" });
+
+    expect(result.status).toBe("error");
+    // Initial attempt + MAX_RATE_LIMIT_RETRIES retries.
+    expect(mockGenerateContent).toHaveBeenCalledTimes(6);
+  });
+
+  it("does not retry a non-429 error", async () => {
+    mockGenerateContent.mockRejectedValueOnce(new Error("some other failure"));
+
+    const result = await autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" });
+
+    expect(result.status).toBe("error");
+    expect(mockGenerateContent).toHaveBeenCalledTimes(1);
   });
 
   it("returns 'empty' immediately when there are no enabled tags at all, without calling Gemini", async () => {
