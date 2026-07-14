@@ -156,11 +156,12 @@ function getSuggestedRetryDelayMs(errorBody) {
 
 /**
  * Runs the classification call against one specific model, handling that
- * model's own 429 (rate limit, retried with backoff up to
+ * model's own 429 (rate limit/quota, retried with backoff up to
  * MAX_RATE_LIMIT_RETRIES times) and 503 (overloaded, retried once) errors.
- * Anything else - including a 503 that persists past its one retry -
+ * Anything else - including a 429 or 503 that persists past its retries -
  * propagates to the caller, which is what lets classify() below fail over
- * to a different model on persistent overload.
+ * to a different model on persistent rate-limiting/quota exhaustion or
+ * overload.
  */
 async function classifyWithModel(model, contents, config) {
   const ai = getClient();
@@ -255,11 +256,16 @@ async function classify({ name, prompt, categoryName, tagNames }) {
     return await classifyWithModel(primaryModel, contents, config);
   } catch (err) {
     const body = parseGeminiErrorBody(err);
-    const stillOverloaded = body?.error?.code === 503;
+    const code = body?.error?.code;
+    // Both a persistent 503 (overloaded) and a persistent 429 (quota
+    // exhausted - e.g. the free tier's 20 requests/day cap on a given
+    // model) mean this model is unusable right now, not that the style is
+    // untaggable - fail over to a different model rather than give up.
+    const primaryExhausted = code === 503 || code === 429;
 
-    if (stillOverloaded && fallbackModel) {
+    if (primaryExhausted && fallbackModel) {
       console.warn(
-        `[autoTagService] Primary model "${primaryModel}" still unavailable after retry - falling back to "${fallbackModel}".`
+        `[autoTagService] Primary model "${primaryModel}" exhausted (${code}) after retry - falling back to "${fallbackModel}".`
       );
       return await classifyWithModel(fallbackModel, contents, config);
     }

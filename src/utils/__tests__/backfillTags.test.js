@@ -108,6 +108,28 @@ describe("backfillTags", () => {
     expect(styleModel.setStyleTagsAutoAssigned).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves a style untouched (no write) when both models are exhausted, so it stays pending for the next run", async () => {
+    styleModel.getStylesNeedingAutoTag.mockResolvedValue([
+      { id: "s1", name: "A", prompt: "p", categoryId: "cat-1" },
+    ]);
+    autoTagService.suggestTagsForStyle.mockResolvedValue({ tagIds: [], status: "error", errorMessage: "both models exhausted" });
+
+    await run();
+
+    expect(styleModel.setStyleTagsAutoAssigned).not.toHaveBeenCalled();
+  });
+
+  it("still writes a genuinely empty classification (status 'empty') - that's a real result, not a pending failure", async () => {
+    styleModel.getStylesNeedingAutoTag.mockResolvedValue([
+      { id: "s1", name: "A", prompt: "p", categoryId: "cat-1" },
+    ]);
+    autoTagService.suggestTagsForStyle.mockResolvedValue({ tagIds: [], status: "empty" });
+
+    await run();
+
+    expect(styleModel.setStyleTagsAutoAssigned).toHaveBeenCalledWith("s1", []);
+  });
+
   it("always closes the db pool so the script actually exits", async () => {
     styleModel.getStylesNeedingAutoTag.mockResolvedValue([]);
 
