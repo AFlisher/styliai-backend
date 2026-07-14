@@ -38,14 +38,13 @@ beforeEach(() => {
   tagModel.getAllTags.mockResolvedValue(TAGS);
   jest.spyOn(console, "error").mockImplementation(() => {});
   jest.spyOn(console, "warn").mockImplementation(() => {});
+  jest.spyOn(console, "log").mockImplementation(() => {});
 });
 
 afterEach(() => {
   console.warn.mockRestore();
-});
-
-afterEach(() => {
   console.error.mockRestore();
+  console.log.mockRestore();
 });
 
 describe("suggestTagsForStyle", () => {
@@ -181,7 +180,7 @@ describe("suggestTagsForStyle", () => {
 
     expect(result.tagIds).toEqual(["t1"]);
     expect(mockGenerateContent).toHaveBeenCalledTimes(2);
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("Rate limited (429)"));
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("rate limited (429)"));
   });
 
   it("gives up after exhausting retries on persistent 429s and reports status 'error'", async () => {
@@ -201,6 +200,91 @@ describe("suggestTagsForStyle", () => {
 
     expect(result.status).toBe("error");
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+  });
+
+  function overloadedError() {
+    return new Error(JSON.stringify({
+      error: { code: 503, status: "UNAVAILABLE", message: "This model is currently experiencing high demand." },
+    }));
+  }
+
+  // The 503 retry backoff is a fixed constant (not derived from the error
+  // body like the 429 retryDelay), so these use fake timers rather than
+  // waiting out a real ~5s delay per test.
+  async function runWithFakeTimers(fn) {
+    jest.useFakeTimers();
+    try {
+      const resultPromise = fn();
+      await jest.runAllTimersAsync();
+      return await resultPromise;
+    } finally {
+      jest.useRealTimers();
+    }
+  }
+
+  it("retries a 503 once on the same model and succeeds", async () => {
+    mockGenerateContent.mockRejectedValueOnce(overloadedError());
+    mockResponseText({ tagNames: ["Cyberpunk"], newTagSuggestion: null });
+
+    const result = await runWithFakeTimers(() =>
+      autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" })
+    );
+
+    expect(result.tagIds).toEqual(["t1"]);
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    expect(mockGenerateContent.mock.calls[0][0].model).toBe("test-model");
+    expect(mockGenerateContent.mock.calls[1][0].model).toBe("test-model");
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("overloaded (503)"));
+  });
+
+  it("falls back to GEMINI_TAGGING_FALLBACK_MODEL when the primary model is still 503 after its retry", async () => {
+    process.env.GEMINI_TAGGING_FALLBACK_MODEL = "fallback-model";
+    mockGenerateContent
+      .mockRejectedValueOnce(overloadedError()) // primary, attempt 1
+      .mockRejectedValueOnce(overloadedError()) // primary, retry
+      .mockResolvedValueOnce({ text: JSON.stringify({ tagNames: ["Cyberpunk"], newTagSuggestion: null }) }); // fallback
+
+    const result = await runWithFakeTimers(() =>
+      autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" })
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.tagIds).toEqual(["t1"]);
+    expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+    expect(mockGenerateContent.mock.calls[0][0].model).toBe("test-model");
+    expect(mockGenerateContent.mock.calls[1][0].model).toBe("test-model");
+    expect(mockGenerateContent.mock.calls[2][0].model).toBe("fallback-model");
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('falling back to "fallback-model"'));
+
+    delete process.env.GEMINI_TAGGING_FALLBACK_MODEL;
+  });
+
+  it("returns status 'error' when both models are persistently overloaded with no further fallback", async () => {
+    process.env.GEMINI_TAGGING_FALLBACK_MODEL = "fallback-model";
+    mockGenerateContent.mockRejectedValue(overloadedError());
+
+    const result = await runWithFakeTimers(() =>
+      autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" })
+    );
+
+    expect(result.status).toBe("error");
+    // primary: initial + 1 retry, fallback: initial + 1 retry = 4 calls total
+    expect(mockGenerateContent).toHaveBeenCalledTimes(4);
+
+    delete process.env.GEMINI_TAGGING_FALLBACK_MODEL;
+  });
+
+  it("does not fall back when no GEMINI_TAGGING_FALLBACK_MODEL is configured - reports status 'error'", async () => {
+    delete process.env.GEMINI_TAGGING_FALLBACK_MODEL;
+    mockGenerateContent.mockRejectedValue(overloadedError());
+
+    const result = await runWithFakeTimers(() =>
+      autoTagService.suggestTagsForStyle({ name: "n", prompt: "p", categoryName: "c" })
+    );
+
+    expect(result.status).toBe("error");
+    // primary only: initial + 1 retry
+    expect(mockGenerateContent).toHaveBeenCalledTimes(2);
   });
 
   it("returns 'empty' immediately when there are no enabled tags at all, without calling Gemini", async () => {

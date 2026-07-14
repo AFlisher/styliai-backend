@@ -32,6 +32,11 @@ const MAX_RATE_LIMIT_RETRIES = 5;
 const BASE_BACKOFF_MS = 5000;
 const MAX_BACKOFF_MS = 65000;
 
+// A 503 ("model overloaded") is Google-side transient capacity, unrelated to
+// quota - one backoff-and-retry on the same model, then fail over to
+// GEMINI_TAGGING_FALLBACK_MODEL (if configured) rather than give up.
+const OVERLOAD_RETRY_BACKOFF_MS = 5000;
+
 let aiClient = null;
 function getClient() {
   if (!aiClient) {
@@ -149,6 +154,71 @@ function getSuggestedRetryDelayMs(errorBody) {
   return Number.isFinite(seconds) ? Math.ceil(seconds * 1000) : null;
 }
 
+/**
+ * Runs the classification call against one specific model, handling that
+ * model's own 429 (rate limit, retried with backoff up to
+ * MAX_RATE_LIMIT_RETRIES times) and 503 (overloaded, retried once) errors.
+ * Anything else - including a 503 that persists past its one retry -
+ * propagates to the caller, which is what lets classify() below fail over
+ * to a different model on persistent overload.
+ */
+async function classifyWithModel(model, contents, config) {
+  const ai = getClient();
+  let overloadRetried = false;
+
+  for (let rateLimitAttempt = 0; rateLimitAttempt <= MAX_RATE_LIMIT_RETRIES; rateLimitAttempt++) {
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({ model, contents, config }),
+        CLASSIFY_TIMEOUT_MS
+      );
+
+      const text = response?.text;
+      if (!text) {
+        throw new Error("Gemini returned an empty response.");
+      }
+
+      console.log(`[autoTagService] Classified using model "${model}".`);
+      return { parsed: JSON.parse(text), modelUsed: model };
+    } catch (err) {
+      const body = parseGeminiErrorBody(err);
+      const code = body?.error?.code;
+
+      if (code === 429) {
+        if (rateLimitAttempt === MAX_RATE_LIMIT_RETRIES) {
+          throw err;
+        }
+        const backoffMs = Math.min(
+          getSuggestedRetryDelayMs(body) ?? BASE_BACKOFF_MS * 2 ** rateLimitAttempt,
+          MAX_BACKOFF_MS
+        );
+        console.warn(
+          `[autoTagService] "${model}" rate limited (429) - retrying in ${backoffMs}ms (attempt ${rateLimitAttempt + 1}/${MAX_RATE_LIMIT_RETRIES})...`
+        );
+        await sleep(backoffMs);
+        continue;
+      }
+
+      if (code === 503 && !overloadRetried) {
+        overloadRetried = true;
+        console.warn(
+          `[autoTagService] "${model}" overloaded (503) - retrying once in ${OVERLOAD_RETRY_BACKOFF_MS}ms...`
+        );
+        await sleep(OVERLOAD_RETRY_BACKOFF_MS);
+        continue;
+      }
+
+      // Anything else - including a 503 that's still happening after the
+      // one retry above - is this model's final answer for this call.
+      throw err;
+    }
+  }
+
+  // Unreachable (the loop always throws or returns), but keeps control flow
+  // analysis happy without an eslint-disable.
+  throw new Error(`[autoTagService] "${model}" exhausted retries with no result.`);
+}
+
 async function classify({ name, prompt, categoryName, tagNames }) {
   // Read lazily (not a module-load-time const) so it always reflects the
   // current env - and, like GEMINI_TAGGING_API_KEY, is never hardcoded:
@@ -156,12 +226,12 @@ async function classify({ name, prompt, categoryName, tagNames }) {
   // existing code (gemini-2.5-flash/-lite both went "no longer available
   // to new users" mid-project), so the model name is entirely
   // operator-controlled via env rather than baked into a default here.
-  const model = process.env.GEMINI_TAGGING_MODEL;
-  if (!model) {
+  const primaryModel = process.env.GEMINI_TAGGING_MODEL;
+  if (!primaryModel) {
     throw new Error("[autoTagService] GEMINI_TAGGING_MODEL is not defined in environment variables.");
   }
+  const fallbackModel = process.env.GEMINI_TAGGING_FALLBACK_MODEL;
 
-  const ai = getClient();
   const contents = [
     {
       role: "user",
@@ -181,42 +251,21 @@ async function classify({ name, prompt, categoryName, tagNames }) {
     temperature: 0,
   };
 
-  let lastErr;
-  for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
-    try {
-      const response = await withTimeout(
-        ai.models.generateContent({ model, contents, config }),
-        CLASSIFY_TIMEOUT_MS
-      );
+  try {
+    return await classifyWithModel(primaryModel, contents, config);
+  } catch (err) {
+    const body = parseGeminiErrorBody(err);
+    const stillOverloaded = body?.error?.code === 503;
 
-      const text = response?.text;
-      if (!text) {
-        throw new Error("Gemini returned an empty response.");
-      }
-      return JSON.parse(text);
-    } catch (err) {
-      lastErr = err;
-      const body = parseGeminiErrorBody(err);
-      const isRateLimited = body?.error?.code === 429;
-
-      if (!isRateLimited || attempt === MAX_RATE_LIMIT_RETRIES) {
-        throw err;
-      }
-
-      const backoffMs = Math.min(
-        getSuggestedRetryDelayMs(body) ?? BASE_BACKOFF_MS * 2 ** attempt,
-        MAX_BACKOFF_MS
-      );
+    if (stillOverloaded && fallbackModel) {
       console.warn(
-        `[autoTagService] Rate limited (429) - retrying in ${backoffMs}ms (attempt ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES})...`
+        `[autoTagService] Primary model "${primaryModel}" still unavailable after retry - falling back to "${fallbackModel}".`
       );
-      await sleep(backoffMs);
+      return await classifyWithModel(fallbackModel, contents, config);
     }
-  }
 
-  // Unreachable (the loop always throws or returns), but keeps control flow
-  // analysis happy without an eslint-disable.
-  throw lastErr;
+    throw err;
+  }
 }
 
 /**
@@ -224,7 +273,9 @@ async function classify({ name, prompt, categoryName, tagNames }) {
  * @param {string} params.name
  * @param {string} params.prompt
  * @param {string} params.categoryName
- * @returns {Promise<{ tagIds: string[], status: 'ok'|'empty'|'error', errorMessage?: string }>}
+ * @returns {Promise<{ tagIds: string[], status: 'ok'|'empty'|'error', modelUsed?: string, errorMessage?: string }>}
+ *   modelUsed is present on 'ok' results and names whichever of
+ *   GEMINI_TAGGING_MODEL/GEMINI_TAGGING_FALLBACK_MODEL actually produced them.
  */
 async function suggestTagsForStyle({ name, prompt, categoryName }) {
   try {
@@ -238,10 +289,10 @@ async function suggestTagsForStyle({ name, prompt, categoryName }) {
       return { tagIds: [], status: "empty" };
     }
 
-    // classify() handles its own per-attempt timeout and 429 retry/backoff
-    // internally - a rate limit here is expected (free tier is 5 req/min),
-    // not an immediate failure.
-    const parsed = await classify({
+    // classify() handles its own per-attempt timeout, 429 retry/backoff, and
+    // 503 retry/fallback internally - a rate limit or transient overload
+    // here is expected (free tier is 5 req/min), not an immediate failure.
+    const { parsed, modelUsed } = await classify({
       name,
       prompt: prompt || "",
       categoryName,
@@ -267,7 +318,7 @@ async function suggestTagsForStyle({ name, prompt, categoryName }) {
     }
 
     if (matchedTags.length > 0) {
-      return { tagIds: matchedTags.map((t) => t.id), status: "ok" };
+      return { tagIds: matchedTags.map((t) => t.id), status: "ok", modelUsed };
     }
 
     // Nothing in the existing vocabulary matched - only now consider
@@ -284,19 +335,19 @@ async function suggestTagsForStyle({ name, prompt, categoryName }) {
 
     const fuzzyMatch = findFuzzyMatch(slug, enabledTags);
     if (fuzzyMatch) {
-      return { tagIds: [fuzzyMatch.id], status: "ok" };
+      return { tagIds: [fuzzyMatch.id], status: "ok", modelUsed };
     }
 
     try {
       const created = await tagModel.createTag({ name: suggestion, isEnabled: true });
-      return { tagIds: [created.id], status: "ok" };
+      return { tagIds: [created.id], status: "ok", modelUsed };
     } catch (err) {
       if (err.code === "23505") {
         // Race: a concurrent request/backfill worker created this exact
         // slug first - reuse it instead of failing.
         const existing = await tagModel.getTagBySlug(slug);
         if (existing) {
-          return { tagIds: [existing.id], status: "ok" };
+          return { tagIds: [existing.id], status: "ok", modelUsed };
         }
       }
       throw err;
