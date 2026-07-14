@@ -92,6 +92,11 @@ components:
 
     Style:
       type: object
+      description: >
+        Admin-shaped Style (includes prompt/negativePrompt/tagIds). Non-admin
+        callers (the mobile app) get an allowlisted subset with prompt,
+        negativePrompt and tagIds omitted entirely - tags are internal
+        ranking metadata, never exposed to end users - see styleModel.getPublicStyles.
       properties:
         id: { type: string, format: uuid }
         categoryId: { type: string, format: uuid }
@@ -106,7 +111,22 @@ components:
         sortOrder: { type: integer }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        tagIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: Admin-only. Curated tag ids assigned to this style, used by RecommendationService.
       required: [id, categoryId, name, prompt, negativePrompt, coverImage, creditCost, isTrending, isPremium, isEnabled, sortOrder]
+
+    Tag:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        isEnabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      required: [id, name, slug, isEnabled]
 
     WalletInfo:
       type: object
@@ -581,14 +601,27 @@ paths:
 
   /api/styles:
     get:
-      summary: List styles. Defaults to enabled-only unless all=true (used by the admin dashboard).
-      security: []
+      summary: >
+        List styles. Defaults to enabled-only unless all=true (used by the
+        admin dashboard). recommended=true returns the personalized "Recommended
+        For You" feed instead (requires userBearerAuth; returns [] if the
+        caller is anonymous, personalization is off, or there's no favorite/creation
+        history yet - see RecommendationService).
+      security: [{ userBearerAuth: [] }, {}]
       parameters:
         - name: categoryId
           in: query
           required: false
           schema: { type: string, format: uuid }
         - name: all
+          in: query
+          required: false
+          schema: { type: string, enum: ["true"] }
+        - name: trending
+          in: query
+          required: false
+          schema: { type: string, enum: ["true"] }
+        - name: recommended
           in: query
           required: false
           schema: { type: string, enum: ["true"] }
@@ -618,11 +651,36 @@ paths:
                 isPremium: { type: boolean, default: false }
                 isEnabled: { type: boolean, default: true }
                 sortOrder: { type: integer }
+                tagIds:
+                  type: array
+                  items: { type: string, format: uuid }
+                  default: []
               required: [categoryId, name, prompt]
       responses:
         '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
         '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '409': { description: Duplicate name in category, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/styles/{id}/similar:
+    get:
+      summary: "\"You may also like\" - styles similar to the given anchor style, ranked by RecommendationService. Anonymous-safe: no auth required, and not gated by the personalization setting since it's style-to-style, not user history."
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 10 }
+      responses:
+        '200':
+          description: Similar styles
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Style' } }
+        '404': { description: Style not found or disabled, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
   /api/styles/reorder:
     put:
@@ -673,6 +731,9 @@ paths:
                 isPremium: { type: boolean }
                 isEnabled: { type: boolean }
                 sortOrder: { type: integer }
+                tagIds:
+                  type: array
+                  items: { type: string, format: uuid }
               required: [categoryId, name, prompt]
       responses:
         '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
@@ -680,6 +741,69 @@ paths:
         '409': { description: Duplicate name in category, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
     delete:
       summary: Delete a style.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Deleted }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/tags:
+    get:
+      summary: List all tags. Admin-only - tags are internal ranking metadata, never listed for the mobile app.
+      security: [{ adminBearerAuth: [] }]
+      responses:
+        '200':
+          description: Tag list
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Tag' } }
+    post:
+      summary: Create a tag.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                isEnabled: { type: boolean, default: true }
+              required: [name]
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Tag' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Duplicate tag name, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/tags/{id}:
+    put:
+      summary: Update a tag.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                isEnabled: { type: boolean }
+              required: [name]
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Tag' } } } }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '409': { description: Duplicate tag name, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+    delete:
+      summary: Delete a tag.
       security: [{ adminBearerAuth: [] }]
       parameters:
         - name: id
