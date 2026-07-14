@@ -113,6 +113,13 @@ async function runMigration() {
       console.log("✅ Seed tags migration completed successfully!");
     }
 
+    const autoTagsSqlPath = path.join(__dirname, '../../migration_auto_tags.sql');
+    if (fs.existsSync(autoTagsSqlPath)) {
+      const autoTagsSql = fs.readFileSync(autoTagsSqlPath, 'utf8');
+      await client.query(autoTagsSql);
+      console.log("✅ Auto-tags migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);

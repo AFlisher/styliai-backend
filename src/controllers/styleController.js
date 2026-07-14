@@ -1,5 +1,12 @@
 const styleModel = require("../models/styleModel");
+const categoryModel = require("../models/categoryModel");
 const recommendationService = require("../services/recommendationService");
+const autoTagService = require("../services/autoTagService");
+
+async function resolveCategoryName(categoryId) {
+  const categories = await categoryModel.getAllCategories();
+  return categories.find((c) => c.id === categoryId)?.name ?? "";
+}
 
 async function getStyles(req, res) {
   try {
@@ -78,6 +85,7 @@ async function createStyle(req, res) {
       isEnabled = true,
       sortOrder,
       tagIds = [],
+      autoAssignTags = true,
     } = req.body;
 
     if (!categoryId) {
@@ -109,6 +117,25 @@ async function createStyle(req, res) {
       parsedCreditCost = numericCreditCost;
     }
 
+    // autoAssignTags defaults to true - a new style is auto-tagged unless
+    // the admin explicitly built a manual tag selection before first save.
+    let finalTagIds = tagIds;
+    let tagsAutoAssigned = false;
+    if (autoAssignTags !== false) {
+      const categoryName = await resolveCategoryName(categoryId);
+      const suggestion = await autoTagService.suggestTagsForStyle({
+        name: name.trim(),
+        prompt: prompt.trim(),
+        categoryName,
+      });
+      // Even on 'error', tagIds ends up [] with tagsAutoAssigned true - this
+      // self-heals via backfillTags.js's next run (it targets exactly this:
+      // tags_auto_assigned = true AND currently untagged), no special
+      // retry logic needed here.
+      finalTagIds = suggestion.tagIds;
+      tagsAutoAssigned = true;
+    }
+
     // sortOrder is intentionally left undefined when the caller doesn't
     // provide one - styleModel.createStyle appends the new style to the
     // end of its category instead of defaulting to 0.
@@ -123,7 +150,8 @@ async function createStyle(req, res) {
       isPremium,
       isEnabled,
       sortOrder,
-      tagIds,
+      tagIds: finalTagIds,
+      tagsAutoAssigned,
     });
     recommendationService.invalidateCandidateCache();
 
@@ -160,6 +188,7 @@ async function updateStyle(req, res) {
       isEnabled = true,
       sortOrder = 0,
       tagIds,
+      autoAssignTags,
     } = req.body;
 
     if (!categoryId) {
@@ -191,6 +220,38 @@ async function updateStyle(req, res) {
       parsedCreditCost = numericCreditCost;
     }
 
+    // The tag pipeline only ever runs when the caller explicitly says so via
+    // autoAssignTags - it's always present from the real Style-modal save
+    // flow, never present from the toggle-only quick actions (isTrending/
+    // isPremium/isEnabled), so there's no risk of an unrelated toggle
+    // silently re-triggering classification. Left undefined here, tagIds
+    // stays whatever the client sent (possibly also undefined), preserving
+    // styleModel.updateStyle's existing "leave tags untouched" behavior.
+    let finalTagIds = tagIds;
+    let tagsAutoAssigned;
+    if (autoAssignTags === false) {
+      finalTagIds = tagIds;
+      tagsAutoAssigned = false;
+    } else if (autoAssignTags === true) {
+      const categoryName = await resolveCategoryName(categoryId);
+      const suggestion = await autoTagService.suggestTagsForStyle({
+        name: name.trim(),
+        prompt: prompt.trim(),
+        categoryName,
+      });
+
+      if (suggestion.status === "error") {
+        // Never wipe existing tags on a transient classification failure -
+        // leave both fields untouched (styleModel.updateStyle's COALESCE/
+        // undefined-guard preserves whatever's already stored).
+        finalTagIds = undefined;
+        tagsAutoAssigned = undefined;
+      } else {
+        finalTagIds = suggestion.tagIds;
+        tagsAutoAssigned = true;
+      }
+    }
+
     const style = await styleModel.updateStyle(id, {
       categoryId,
       name: name.trim(),
@@ -202,7 +263,8 @@ async function updateStyle(req, res) {
       isPremium,
       isEnabled,
       sortOrder,
-      tagIds,
+      tagIds: finalTagIds,
+      tagsAutoAssigned,
     });
 
     if (!style) {

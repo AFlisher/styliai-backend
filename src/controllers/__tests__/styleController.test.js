@@ -1,20 +1,30 @@
 jest.mock("../../models/styleModel", () => ({
   getStyles: jest.fn(),
   getPublicStyles: jest.fn(),
+  createStyle: jest.fn(),
+  updateStyle: jest.fn(),
+}));
+jest.mock("../../models/categoryModel", () => ({
+  getAllCategories: jest.fn(),
 }));
 jest.mock("../../services/recommendationService", () => ({
   isPersonalizationEnabled: jest.fn(),
   getPersonalizedRecommendations: jest.fn(),
   invalidateCandidateCache: jest.fn(),
 }));
+jest.mock("../../services/autoTagService", () => ({
+  suggestTagsForStyle: jest.fn(),
+}));
 
 const styleModel = require("../../models/styleModel");
+const categoryModel = require("../../models/categoryModel");
 const recommendationService = require("../../services/recommendationService");
-const { getStyles } = require("../styleController");
+const autoTagService = require("../../services/autoTagService");
+const { getStyles, createStyle, updateStyle } = require("../styleController");
 
-function makeReqRes({ query = {}, admin, user } = {}) {
-  const req = { query, admin, user };
-  const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+function makeReqRes({ query = {}, admin, user, body = {}, params = {} } = {}) {
+  const req = { query, admin, user, body, params };
+  const res = { status: jest.fn().mockReturnThis(), json: jest.fn(), send: jest.fn() };
   return { req, res };
 }
 
@@ -131,5 +141,133 @@ describe("styleController.getStyles - ?recommended=true", () => {
     expect(recommendationService.getPersonalizedRecommendations).toHaveBeenCalledWith({ userId: "u1" });
     expect(res.json).toHaveBeenCalledWith([{ id: "s1" }]);
     expect(styleModel.getPublicStyles).not.toHaveBeenCalled();
+  });
+});
+
+const BASE_BODY = {
+  categoryId: "cat-1",
+  name: "Cyberpunk mercenary",
+  prompt: "a neon-lit cyberpunk scene",
+};
+
+describe("styleController.createStyle - auto-tag gating", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    categoryModel.getAllCategories.mockResolvedValue([{ id: "cat-1", name: "Fantasy" }]);
+    styleModel.createStyle.mockResolvedValue({ id: "s1" });
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    console.error.mockRestore();
+  });
+
+  it("defaults to auto-tagging, ignoring any client-sent tagIds", async () => {
+    autoTagService.suggestTagsForStyle.mockResolvedValue({ tagIds: ["t1", "t2"], status: "ok" });
+    const { req, res } = makeReqRes({ body: { ...BASE_BODY, tagIds: ["client-sent-id"] } });
+
+    await createStyle(req, res);
+
+    expect(autoTagService.suggestTagsForStyle).toHaveBeenCalledWith({
+      name: "Cyberpunk mercenary",
+      prompt: "a neon-lit cyberpunk scene",
+      categoryName: "Fantasy",
+    });
+    expect(styleModel.createStyle).toHaveBeenCalledWith(
+      expect.objectContaining({ tagIds: ["t1", "t2"], tagsAutoAssigned: true })
+    );
+  });
+
+  it("trusts client tagIds verbatim and skips classification when autoAssignTags is false", async () => {
+    const { req, res } = makeReqRes({ body: { ...BASE_BODY, tagIds: ["manual-id"], autoAssignTags: false } });
+
+    await createStyle(req, res);
+
+    expect(autoTagService.suggestTagsForStyle).not.toHaveBeenCalled();
+    expect(styleModel.createStyle).toHaveBeenCalledWith(
+      expect.objectContaining({ tagIds: ["manual-id"], tagsAutoAssigned: false })
+    );
+  });
+
+  it("stores an empty tag list (still auto-assigned) when classification errors, self-healing via later backfill", async () => {
+    autoTagService.suggestTagsForStyle.mockResolvedValue({ tagIds: [], status: "error", errorMessage: "boom" });
+    const { req, res } = makeReqRes({ body: BASE_BODY });
+
+    await createStyle(req, res);
+
+    expect(styleModel.createStyle).toHaveBeenCalledWith(
+      expect.objectContaining({ tagIds: [], tagsAutoAssigned: true })
+    );
+  });
+});
+
+describe("styleController.updateStyle - auto-tag gating", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    categoryModel.getAllCategories.mockResolvedValue([{ id: "cat-1", name: "Fantasy" }]);
+    styleModel.updateStyle.mockResolvedValue({ id: "s1" });
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    console.error.mockRestore();
+  });
+
+  it("skips the tag pipeline entirely when autoAssignTags is absent (e.g. a quick toggle call)", async () => {
+    const { req, res } = makeReqRes({ params: { id: "s1" }, body: BASE_BODY });
+
+    await updateStyle(req, res);
+
+    expect(autoTagService.suggestTagsForStyle).not.toHaveBeenCalled();
+    const callArg = styleModel.updateStyle.mock.calls[0][1];
+    expect(callArg.tagIds).toBeUndefined();
+    expect(callArg.tagsAutoAssigned).toBeUndefined();
+  });
+
+  it("re-classifies using this request's edited name/prompt/category when autoAssignTags is true", async () => {
+    autoTagService.suggestTagsForStyle.mockResolvedValue({ tagIds: ["t9"], status: "ok" });
+    const { req, res } = makeReqRes({
+      params: { id: "s1" },
+      body: { ...BASE_BODY, name: "Edited name", autoAssignTags: true },
+    });
+
+    await updateStyle(req, res);
+
+    expect(autoTagService.suggestTagsForStyle).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Edited name" })
+    );
+    expect(styleModel.updateStyle).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ tagIds: ["t9"], tagsAutoAssigned: true })
+    );
+  });
+
+  it("trusts client tagIds verbatim and sets tagsAutoAssigned false when autoAssignTags is false", async () => {
+    const { req, res } = makeReqRes({
+      params: { id: "s1" },
+      body: { ...BASE_BODY, tagIds: ["manual-id"], autoAssignTags: false },
+    });
+
+    await updateStyle(req, res);
+
+    expect(autoTagService.suggestTagsForStyle).not.toHaveBeenCalled();
+    expect(styleModel.updateStyle).toHaveBeenCalledWith(
+      "s1",
+      expect.objectContaining({ tagIds: ["manual-id"], tagsAutoAssigned: false })
+    );
+  });
+
+  it("preserves existing tags (does not wipe them) when classification errors during an update", async () => {
+    autoTagService.suggestTagsForStyle.mockResolvedValue({ tagIds: [], status: "error", errorMessage: "boom" });
+    const { req, res } = makeReqRes({
+      params: { id: "s1" },
+      body: { ...BASE_BODY, autoAssignTags: true },
+    });
+
+    await updateStyle(req, res);
+
+    const callArg = styleModel.updateStyle.mock.calls[0][1];
+    expect(callArg.tagIds).toBeUndefined();
+    expect(callArg.tagsAutoAssigned).toBeUndefined();
   });
 });

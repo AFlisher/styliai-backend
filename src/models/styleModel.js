@@ -42,6 +42,7 @@ async function getStyles(filters = {}) {
       s.sort_order AS "sortOrder",
       s.created_at AS "createdAt",
       s.updated_at AS "updatedAt",
+      s.tags_auto_assigned AS "tagsAutoAssigned",
       COALESCE(array_agg(st.tag_id) FILTER (WHERE st.tag_id IS NOT NULL), ARRAY[]::uuid[]) AS "tagIds"
     FROM styles s
     LEFT JOIN style_tags st ON st.style_id = s.id
@@ -177,6 +178,7 @@ async function getStyleById(id) {
       s.sort_order AS "sortOrder",
       s.created_at AS "createdAt",
       s.updated_at AS "updatedAt",
+      s.tags_auto_assigned AS "tagsAutoAssigned",
       COALESCE(array_agg(st.tag_id) FILTER (WHERE st.tag_id IS NOT NULL), ARRAY[]::uuid[]) AS "tagIds"
     FROM styles s
     LEFT JOIN style_tags st ON st.style_id = s.id
@@ -220,6 +222,24 @@ async function getEnabledStylesWithTags() {
 }
 
 /**
+ * Styles eligible for backfillTags.js: currently untagged AND not manually
+ * curated. tags_auto_assigned = true is a hard invariant here, not just a
+ * default filter - a style an admin has manually tagged must never be
+ * touched by the backfill, regardless of how it's invoked.
+ */
+async function getStylesNeedingAutoTag() {
+  const result = await db.query(`
+    SELECT s.id, s.name, s.prompt, s.category_id AS "categoryId"
+    FROM styles s
+    LEFT JOIN style_tags st ON st.style_id = s.id
+    WHERE s.tags_auto_assigned = true AND st.style_id IS NULL
+    ORDER BY s.created_at ASC
+  `);
+
+  return result.rows;
+}
+
+/**
  * Replaces the full tag set for a style. Accepts a `queryable` (either the
  * shared pool or a client already inside a transaction, e.g. from
  * createStyle/updateStyle) so it can participate in the caller's
@@ -234,6 +254,30 @@ async function setStyleTags(queryable, styleId, tagIds = []) {
       `INSERT INTO style_tags (style_id, tag_id) VALUES ${valuesSql} ON CONFLICT DO NOTHING`,
       [styleId, ...tagIds]
     );
+  }
+}
+
+/**
+ * Used by backfillTags.js: applies a fresh auto-tag classification result to
+ * a style and marks it as auto-assigned, in one transaction. Reuses
+ * setStyleTags (the same tag-write path createStyle/updateStyle use) rather
+ * than duplicating the delete+insert logic.
+ */
+async function setStyleTagsAutoAssigned(styleId, tagIds) {
+  const client = await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+    await setStyleTags(client, styleId, tagIds);
+    await client.query(
+      `UPDATE styles SET tags_auto_assigned = true, updated_at = NOW() WHERE id = $1`,
+      [styleId]
+    );
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
@@ -254,11 +298,13 @@ async function createStyle(style) {
         is_trending,
         is_premium,
         is_enabled,
-        sort_order
+        sort_order,
+        tags_auto_assigned
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        COALESCE($10, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM styles WHERE category_id = $1))
+        COALESCE($10, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM styles WHERE category_id = $1)),
+        $11
       )
       RETURNING id
       `,
@@ -272,7 +318,8 @@ async function createStyle(style) {
         style.isTrending,
         style.isPremium,
         style.isEnabled,
-        style.sortOrder ?? null
+        style.sortOrder ?? null,
+        style.tagsAutoAssigned ?? true
       ]
     );
 
@@ -309,8 +356,9 @@ async function updateStyle(id, style) {
         is_premium = $8,
         is_enabled = $9,
         sort_order = $10,
+        tags_auto_assigned = COALESCE($11, tags_auto_assigned),
         updated_at = NOW()
-      WHERE id = $11
+      WHERE id = $12
       RETURNING id
       `,
       [
@@ -324,6 +372,7 @@ async function updateStyle(id, style) {
         style.isPremium,
         style.isEnabled,
         style.sortOrder,
+        style.tagsAutoAssigned ?? null,
         id
       ]
     );
@@ -396,7 +445,9 @@ module.exports = {
   getPublicStylesByIds,
   getStyleById,
   getEnabledStylesWithTags,
+  getStylesNeedingAutoTag,
   setStyleTags,
+  setStyleTagsAutoAssigned,
   createStyle,
   updateStyle,
   deleteStyle,
