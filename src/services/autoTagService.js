@@ -21,13 +21,16 @@
 const { GoogleGenAI, Type } = require("@google/genai");
 const tagModel = require("../models/tagModel");
 
-// A separate, text-only model from GEMINI_MODEL (gemini-2.5-flash-image),
-// which is an image-output model and the wrong tool for this.
-const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash";
-
 const MAX_TAGS = 6;
 const CLASSIFY_TIMEOUT_MS = 10000;
 const PROMPT_EXCERPT_LENGTH = 2000;
+
+// The free tier is 5 requests/minute per model - a single style save (or a
+// backfillTags.js worker) hitting that cap is expected, not exceptional, so
+// a 429 is retried with backoff rather than surfaced as a failure.
+const MAX_RATE_LIMIT_RETRIES = 5;
+const BASE_BACKOFF_MS = 5000;
+const MAX_BACKOFF_MS = 65000;
 
 let aiClient = null;
 function getClient() {
@@ -115,37 +118,105 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The GoogleGenAI SDK throws with `err.message` set to the raw JSON error
+ * body (e.g. `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED",...}}`) -
+ * this parses that back out, returning null for errors that aren't shaped
+ * this way (timeouts, JSON.parse failures on a malformed response, etc.).
+ */
+function parseGeminiErrorBody(err) {
+  try {
+    return JSON.parse(err.message);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Extracts Google's own suggested wait time from a 429's RetryInfo detail, e.g. "54.404539015s". */
+function getSuggestedRetryDelayMs(errorBody) {
+  const details = errorBody?.error?.details;
+  if (!Array.isArray(details)) return null;
+
+  const retryInfo = details.find((d) => typeof d["@type"] === "string" && d["@type"].includes("RetryInfo"));
+  const raw = retryInfo?.retryDelay;
+  if (typeof raw !== "string") return null;
+
+  const seconds = parseFloat(raw);
+  return Number.isFinite(seconds) ? Math.ceil(seconds * 1000) : null;
+}
+
 async function classify({ name, prompt, categoryName, tagNames }) {
-  const ai = getClient();
-
-  const response = await ai.models.generateContent({
-    model: TEXT_MODEL,
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: buildClassificationPrompt({ name, prompt, categoryName, tagNames }) }],
-      },
-    ],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          tagNames: { type: Type.ARRAY, items: { type: Type.STRING } },
-          newTagSuggestion: { type: Type.STRING, nullable: true },
-        },
-        required: ["tagNames"],
-      },
-      temperature: 0,
-    },
-  });
-
-  const text = response?.text;
-  if (!text) {
-    throw new Error("Gemini returned an empty response.");
+  // Read lazily (not a module-load-time const) so it always reflects the
+  // current env - and, like GEMINI_TAGGING_API_KEY, is never hardcoded:
+  // Google periodically deprecates specific model names out from under
+  // existing code (gemini-2.5-flash/-lite both went "no longer available
+  // to new users" mid-project), so the model name is entirely
+  // operator-controlled via env rather than baked into a default here.
+  const model = process.env.GEMINI_TAGGING_MODEL;
+  if (!model) {
+    throw new Error("[autoTagService] GEMINI_TAGGING_MODEL is not defined in environment variables.");
   }
 
-  return JSON.parse(text);
+  const ai = getClient();
+  const contents = [
+    {
+      role: "user",
+      parts: [{ text: buildClassificationPrompt({ name, prompt, categoryName, tagNames }) }],
+    },
+  ];
+  const config = {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: Type.OBJECT,
+      properties: {
+        tagNames: { type: Type.ARRAY, items: { type: Type.STRING } },
+        newTagSuggestion: { type: Type.STRING, nullable: true },
+      },
+      required: ["tagNames"],
+    },
+    temperature: 0,
+  };
+
+  let lastErr;
+  for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
+    try {
+      const response = await withTimeout(
+        ai.models.generateContent({ model, contents, config }),
+        CLASSIFY_TIMEOUT_MS
+      );
+
+      const text = response?.text;
+      if (!text) {
+        throw new Error("Gemini returned an empty response.");
+      }
+      return JSON.parse(text);
+    } catch (err) {
+      lastErr = err;
+      const body = parseGeminiErrorBody(err);
+      const isRateLimited = body?.error?.code === 429;
+
+      if (!isRateLimited || attempt === MAX_RATE_LIMIT_RETRIES) {
+        throw err;
+      }
+
+      const backoffMs = Math.min(
+        getSuggestedRetryDelayMs(body) ?? BASE_BACKOFF_MS * 2 ** attempt,
+        MAX_BACKOFF_MS
+      );
+      console.warn(
+        `[autoTagService] Rate limited (429) - retrying in ${backoffMs}ms (attempt ${attempt + 1}/${MAX_RATE_LIMIT_RETRIES})...`
+      );
+      await sleep(backoffMs);
+    }
+  }
+
+  // Unreachable (the loop always throws or returns), but keeps control flow
+  // analysis happy without an eslint-disable.
+  throw lastErr;
 }
 
 /**
@@ -167,10 +238,15 @@ async function suggestTagsForStyle({ name, prompt, categoryName }) {
       return { tagIds: [], status: "empty" };
     }
 
-    const parsed = await withTimeout(
-      classify({ name, prompt: prompt || "", categoryName, tagNames: enabledTags.map((t) => t.name) }),
-      CLASSIFY_TIMEOUT_MS
-    );
+    // classify() handles its own per-attempt timeout and 429 retry/backoff
+    // internally - a rate limit here is expected (free tier is 5 req/min),
+    // not an immediate failure.
+    const parsed = await classify({
+      name,
+      prompt: prompt || "",
+      categoryName,
+      tagNames: enabledTags.map((t) => t.name),
+    });
 
     const rawTagNames = Array.isArray(parsed?.tagNames) ? parsed.tagNames : [];
     const nameToTag = new Map(enabledTags.map((t) => [t.name.toLowerCase().trim(), t]));
