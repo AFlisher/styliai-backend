@@ -73,8 +73,9 @@ async function main() {
     });
 
     processed++;
+    const modelNote = suggestion.modelUsed ? ` via "${suggestion.modelUsed}"` : "";
     console.log(
-      `[backfillTags] (${processed}/${targets.length}) "${style.name}" -> ${suggestion.status} [${suggestion.tagIds.length} tag(s)]`
+      `[backfillTags] (${processed}/${targets.length}) "${style.name}" -> ${suggestion.status} [${suggestion.tagIds.length} tag(s)]${modelNote}`
     );
 
     if (!dryRun) {
