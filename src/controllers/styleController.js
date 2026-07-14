@@ -1,8 +1,32 @@
 const styleModel = require("../models/styleModel");
+const recommendationService = require("../services/recommendationService");
 
 async function getStyles(req, res) {
   try {
-    const { categoryId, all, trending } = req.query;
+    const { categoryId, all, trending, recommended } = req.query;
+
+    // ?recommended=true powers the Home screen's "Recommended For You"
+    // section. This branches out before any of the category/trending
+    // filters below because it's a completely different query shape
+    // (ranked-by-RecommendationService, not a plain WHERE filter) - and,
+    // critically, the personalization-off/anonymous checks here must run
+    // BEFORE recommendationService is ever called, so a user with
+    // personalization off has their favorites/creations never even queried.
+    if (recommended === "true") {
+      if (!req.user) {
+        return res.json([]);
+      }
+
+      const enabled = await recommendationService.isPersonalizationEnabled(req.user.id);
+      if (!enabled) {
+        return res.json([]);
+      }
+
+      const recommendations = await recommendationService.getPersonalizedRecommendations({
+        userId: req.user.id,
+      });
+      return res.json(recommendations);
+    }
 
     const filters = {};
     if (categoryId) {
@@ -26,7 +50,7 @@ async function getStyles(req, res) {
     // req.admin is only set by optionalAdminAuth when a valid admin token was
     // presented (the Admin Dashboard always sends one). Anyone else -
     // including the mobile app, which never holds an admin token - gets the
-    // public DTO with no prompt/negativePrompt/generation-config fields.
+    // public DTO with no prompt/negativePrompt/generation-config/tagIds fields.
     const styles = req.admin
       ? await styleModel.getStyles(filters)
       : await styleModel.getPublicStyles(filters);
@@ -53,6 +77,7 @@ async function createStyle(req, res) {
       isPremium = false,
       isEnabled = true,
       sortOrder,
+      tagIds = [],
     } = req.body;
 
     if (!categoryId) {
@@ -98,7 +123,9 @@ async function createStyle(req, res) {
       isPremium,
       isEnabled,
       sortOrder,
+      tagIds,
     });
+    recommendationService.invalidateCandidateCache();
 
     res.status(201).json(style);
 
@@ -132,6 +159,7 @@ async function updateStyle(req, res) {
       isPremium = false,
       isEnabled = true,
       sortOrder = 0,
+      tagIds,
     } = req.body;
 
     if (!categoryId) {
@@ -174,6 +202,7 @@ async function updateStyle(req, res) {
       isPremium,
       isEnabled,
       sortOrder,
+      tagIds,
     });
 
     if (!style) {
@@ -181,6 +210,7 @@ async function updateStyle(req, res) {
         message: "Style not found.",
       });
     }
+    recommendationService.invalidateCandidateCache();
 
     return res.json(style);
 
@@ -210,6 +240,7 @@ async function deleteStyle(req, res) {
         message: "Style not found.",
       });
     }
+    recommendationService.invalidateCandidateCache();
 
     return res.status(204).send();
 

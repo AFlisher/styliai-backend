@@ -92,6 +92,20 @@ async function runMigration() {
       console.log("✅ Creations migration completed successfully!");
     }
 
+    const tagsSqlPath = path.join(__dirname, '../../migration_tags.sql');
+    if (fs.existsSync(tagsSqlPath)) {
+      const tagsSql = fs.readFileSync(tagsSqlPath, 'utf8');
+      await client.query(tagsSql);
+      console.log("✅ Tags migration completed successfully!");
+    }
+
+    const personalizationSqlPath = path.join(__dirname, '../../migration_personalization.sql');
+    if (fs.existsSync(personalizationSqlPath)) {
+      const personalizationSql = fs.readFileSync(personalizationSqlPath, 'utf8');
+      await client.query(personalizationSql);
+      console.log("✅ Personalization migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);

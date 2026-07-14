@@ -2,12 +2,18 @@ jest.mock("../../models/styleModel", () => ({
   getStyles: jest.fn(),
   getPublicStyles: jest.fn(),
 }));
+jest.mock("../../services/recommendationService", () => ({
+  isPersonalizationEnabled: jest.fn(),
+  getPersonalizedRecommendations: jest.fn(),
+  invalidateCandidateCache: jest.fn(),
+}));
 
 const styleModel = require("../../models/styleModel");
+const recommendationService = require("../../services/recommendationService");
 const { getStyles } = require("../styleController");
 
-function makeReqRes({ query = {}, admin } = {}) {
-  const req = { query, admin };
+function makeReqRes({ query = {}, admin, user } = {}) {
+  const req = { query, admin, user };
   const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
   return { req, res };
 }
@@ -81,5 +87,49 @@ describe("styleController.getStyles - public/admin DTO split", () => {
     await getStyles(req, res);
 
     expect(styleModel.getPublicStyles).toHaveBeenCalledWith({ isEnabled: true });
+  });
+});
+
+describe("styleController.getStyles - ?recommended=true", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    console.error.mockRestore();
+  });
+
+  it("returns [] for an anonymous caller without ever checking personalization or ranking", async () => {
+    const { req, res } = makeReqRes({ query: { recommended: "true" } });
+
+    await getStyles(req, res);
+
+    expect(res.json).toHaveBeenCalledWith([]);
+    expect(recommendationService.isPersonalizationEnabled).not.toHaveBeenCalled();
+    expect(recommendationService.getPersonalizedRecommendations).not.toHaveBeenCalled();
+  });
+
+  it("returns [] when the caller has personalization disabled, without ranking", async () => {
+    recommendationService.isPersonalizationEnabled.mockResolvedValue(false);
+    const { req, res } = makeReqRes({ query: { recommended: "true" }, user: { id: "u1" } });
+
+    await getStyles(req, res);
+
+    expect(recommendationService.isPersonalizationEnabled).toHaveBeenCalledWith("u1");
+    expect(recommendationService.getPersonalizedRecommendations).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith([]);
+  });
+
+  it("delegates to recommendationService when logged in with personalization enabled", async () => {
+    recommendationService.isPersonalizationEnabled.mockResolvedValue(true);
+    recommendationService.getPersonalizedRecommendations.mockResolvedValue([{ id: "s1" }]);
+    const { req, res } = makeReqRes({ query: { recommended: "true" }, user: { id: "u1" } });
+
+    await getStyles(req, res);
+
+    expect(recommendationService.getPersonalizedRecommendations).toHaveBeenCalledWith({ userId: "u1" });
+    expect(res.json).toHaveBeenCalledWith([{ id: "s1" }]);
+    expect(styleModel.getPublicStyles).not.toHaveBeenCalled();
   });
 });
