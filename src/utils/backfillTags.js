@@ -15,6 +15,13 @@
  * next run instead of being permanently marked "done" with nothing to show
  * for it.
  *
+ * Env vars (both optional, tuned conservatively by default for small
+ * free-tier quotas):
+ *   AUTOTAG_BACKFILL_CONCURRENCY - parallel workers, default 1 (serial).
+ *   AUTOTAG_BACKFILL_DELAY_MS    - pause between styles per worker,
+ *                                  default 2000. Not applied after the
+ *                                  last style.
+ *
  * Usage:
  *   node src/utils/backfillTags.js [--dry-run] [--limit=N]
  */
@@ -26,7 +33,16 @@ const styleModel = require("../models/styleModel");
 const categoryModel = require("../models/categoryModel");
 const autoTagService = require("../services/autoTagService");
 
-const CONCURRENCY = Number(process.env.AUTOTAG_BACKFILL_CONCURRENCY) || 3;
+// Default concurrency of 1 (not the previous 3): the free tier's per-model
+// daily quota is small enough (as low as 20 requests/day observed) that
+// parallel workers each independently retrying can exhaust it in seconds.
+// Both remain overridable via env for whoever's account has more headroom.
+const CONCURRENCY = Number(process.env.AUTOTAG_BACKFILL_CONCURRENCY) || 1;
+const DELAY_BETWEEN_STYLES_MS = Number(process.env.AUTOTAG_BACKFILL_DELAY_MS) || 2000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function parseArgs(argv) {
   const dryRun = argv.includes("--dry-run");
@@ -35,7 +51,13 @@ function parseArgs(argv) {
   return { dryRun, limit };
 }
 
-/** Bounded-concurrency worker pool - no new dependency for a one-off script. */
+/**
+ * Bounded-concurrency worker pool - no new dependency for a one-off script.
+ * Each lane paces itself with DELAY_BETWEEN_STYLES_MS between its own
+ * items (skipped after the very last one), so at CONCURRENCY=1 this is
+ * exactly "N seconds between styles"; at higher concurrency each parallel
+ * lane still self-paces the same way.
+ */
 async function runWithConcurrency(items, concurrency, worker) {
   let index = 0;
   let crashCount = 0;
@@ -48,6 +70,10 @@ async function runWithConcurrency(items, concurrency, worker) {
       } catch (err) {
         crashCount++;
         console.error(`[backfillTags] Failed to process style ${current.id} (${current.name}):`, err.message);
+      }
+
+      if (index < items.length) {
+        await sleep(DELAY_BETWEEN_STYLES_MS);
       }
     }
   }

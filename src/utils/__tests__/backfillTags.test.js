@@ -13,6 +13,9 @@ describe("backfillTags", () => {
 
   beforeEach(() => {
     jest.resetModules();
+    // Default to no inter-style delay so unrelated tests stay fast; the
+    // dedicated delay test below overrides this.
+    process.env.AUTOTAG_BACKFILL_DELAY_MS = "0";
 
     jest.doMock("../../config/db", () => ({ pool: { end: jest.fn().mockResolvedValue(undefined) } }));
     jest.doMock("../../models/styleModel", () => ({
@@ -33,6 +36,8 @@ describe("backfillTags", () => {
 
   afterEach(() => {
     process.argv = originalArgv;
+    delete process.env.AUTOTAG_BACKFILL_DELAY_MS;
+    delete process.env.AUTOTAG_BACKFILL_CONCURRENCY;
     console.log.mockRestore();
     console.error.mockRestore();
   });
@@ -128,6 +133,57 @@ describe("backfillTags", () => {
     await run();
 
     expect(styleModel.setStyleTagsAutoAssigned).toHaveBeenCalledWith("s1", []);
+  });
+
+  it("waits AUTOTAG_BACKFILL_DELAY_MS between styles, but not after the last one", async () => {
+    process.env.AUTOTAG_BACKFILL_DELAY_MS = "2000";
+    styleModel.getStylesNeedingAutoTag.mockResolvedValue([
+      { id: "s1", name: "A", prompt: "p", categoryId: "cat-1" },
+      { id: "s2", name: "B", prompt: "p", categoryId: "cat-1" },
+    ]);
+    autoTagService.suggestTagsForStyle.mockResolvedValue({ tagIds: ["t1"], status: "ok" });
+
+    jest.useFakeTimers();
+    const setTimeoutSpy = jest.spyOn(global, "setTimeout");
+    const finished = run();
+    await jest.runAllTimersAsync();
+    await finished;
+    jest.useRealTimers();
+
+    const delayCalls = setTimeoutSpy.mock.calls.filter(([, ms]) => ms === 2000);
+    expect(delayCalls.length).toBe(1); // between s1 and s2, not after s2
+    expect(autoTagService.suggestTagsForStyle).toHaveBeenCalledTimes(2);
+  });
+
+  it("defaults to concurrency 1 (serial) when AUTOTAG_BACKFILL_CONCURRENCY is unset", async () => {
+    styleModel.getStylesNeedingAutoTag.mockResolvedValue([
+      { id: "s1", name: "A", prompt: "p", categoryId: "cat-1" },
+      { id: "s2", name: "B", prompt: "p", categoryId: "cat-1" },
+    ]);
+
+    let resolveFirst;
+    const firstCallGate = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    autoTagService.suggestTagsForStyle
+      .mockImplementationOnce(async () => {
+        await firstCallGate;
+        return { tagIds: ["t1"], status: "ok" };
+      })
+      .mockResolvedValueOnce({ tagIds: ["t1"], status: "ok" });
+
+    const finished = run();
+
+    // With true concurrency 1, the second style must not be requested
+    // until the first worker call actually resolves.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(autoTagService.suggestTagsForStyle).toHaveBeenCalledTimes(1);
+
+    resolveFirst();
+    await finished;
+
+    expect(autoTagService.suggestTagsForStyle).toHaveBeenCalledTimes(2);
   });
 
   it("always closes the db pool so the script actually exits", async () => {
