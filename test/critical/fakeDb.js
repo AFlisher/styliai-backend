@@ -49,6 +49,19 @@ function seedUser(u) {
   return user;
 }
 
+function seedWalletTx(userId, { amount, type, description = "", createdAt }) {
+  const row = {
+    id: `tx-${state.walletTransactions.length + 1}`,
+    userId,
+    amount,
+    type,
+    description,
+    createdAt: createdAt || new Date().toISOString(),
+  };
+  state.walletTransactions.push(row);
+  return row;
+}
+
 function seedStyle(s) {
   const style = {
     id: s.id,
@@ -123,7 +136,11 @@ async function query(text, params = []) {
     return { rows: [row], rowCount: 1 };
   }
   if (q.includes("FROM wallet_transactions")) {
-    const rows = state.walletTransactions.filter((t) => t.userId === params[0]);
+    // Mirror the real query's "ORDER BY created_at DESC" (newest first).
+    const rows = state.walletTransactions
+      .filter((t) => t.userId === params[0])
+      .slice()
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     return { rows, rowCount: rows.length };
   }
 
@@ -255,4 +272,4 @@ function buildSslConfig() {
   return false;
 }
 
-module.exports = { query, pool, buildSslConfig, state, reset, seedUser, seedStyle };
+module.exports = { query, pool, buildSslConfig, state, reset, seedUser, seedStyle, seedWalletTx };
