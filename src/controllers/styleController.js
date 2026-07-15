@@ -2,19 +2,29 @@ const styleModel = require("../models/styleModel");
 const categoryModel = require("../models/categoryModel");
 const recommendationService = require("../services/recommendationService");
 const autoTagService = require("../services/autoTagService");
-const { PromptValidationError, assertUniqueKeys } = require("../utils/promptTemplate");
+const {
+  PromptValidationError,
+  assertUniqueKeys,
+  validatePromptFields,
+  buildFinalPrompt,
+} = require("../utils/promptTemplate");
 
 /**
  * Validates admin-supplied dynamic field definitions before any DB write, so a
  * bad set is rejected with 400 up front. `undefined` means "leave fields
  * untouched"; an array (incl. empty) is validated and will be persisted.
+ *
+ * When a fields array is supplied, also enforces that every {{placeholder}} in
+ * the prompt has a matching field (a style can't be saved referencing an
+ * undefined placeholder). Unused fields are allowed (dashboard warns only).
  */
-function validateFieldsInput(fields) {
+function validateFieldsInput(fields, prompt) {
   if (fields === undefined) return;
   if (!Array.isArray(fields)) {
     throw new PromptValidationError("fields must be an array.");
   }
   assertUniqueKeys(fields);
+  validatePromptFields(prompt || "", fields);
 }
 
 async function resolveCategoryName(categoryId) {
@@ -121,7 +131,7 @@ async function createStyle(req, res) {
       });
     }
 
-    validateFieldsInput(fields);
+    validateFieldsInput(fields, prompt);
 
     let parsedCreditCost = 1;
     if (creditCost !== undefined) {
@@ -232,7 +242,7 @@ async function updateStyle(req, res) {
       });
     }
 
-    validateFieldsInput(fields);
+    validateFieldsInput(fields, prompt);
 
     let parsedCreditCost = 1;
     if (creditCost !== undefined) {
@@ -370,10 +380,42 @@ async function reorderStyles(req, res) {
   }
 }
 
+/**
+ * POST /api/styles/prompt-preview  (admin only)
+ *
+ * Renders the final prompt exactly as generation would, from an admin-supplied
+ * prompt + field definitions + sample values - so the dashboard's live preview
+ * matches production byte-for-byte (it reuses the same engine). Admin-guarded,
+ * so the real prompt is never exposed to non-admins.
+ */
+async function previewPrompt(req, res) {
+  try {
+    const { prompt = "", fields = [], values = {} } = req.body || {};
+    if (typeof prompt !== "string") {
+      return res.status(400).json({ message: "prompt must be a string." });
+    }
+    if (fields !== undefined && !Array.isArray(fields)) {
+      return res.status(400).json({ message: "fields must be an array." });
+    }
+    // Surface definition problems (bad key, dropdown without options, dup) the
+    // same way a save would, so the preview is a faithful dry run.
+    assertUniqueKeys(fields);
+    const finalPrompt = buildFinalPrompt({ prompt, fields, values });
+    return res.json({ prompt: finalPrompt });
+  } catch (err) {
+    if (err instanceof PromptValidationError) {
+      return res.status(400).json({ message: err.message });
+    }
+    console.error(err);
+    return res.status(500).json({ message: "Failed to render prompt preview." });
+  }
+}
+
 module.exports = {
   getStyles,
   createStyle,
   updateStyle,
   deleteStyle,
   reorderStyles,
+  previewPrompt,
 };

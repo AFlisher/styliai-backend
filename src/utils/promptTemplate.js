@@ -162,9 +162,46 @@ function validateAndCoerce(field, rawValue) {
     }
     case "text":
     case "textarea":
-    default:
-      return sanitizeValue(rawValue, field);
+    default: {
+      const v = sanitizeValue(rawValue, field);
+      const minLength = Number(field.config?.minLength);
+      if (Number.isFinite(minLength) && minLength > 0 && v.length < minLength) {
+        throw new PromptValidationError(`"${field.label}" must be at least ${minLength} characters.`, field.key);
+      }
+      const pattern = field.config?.regex;
+      if (typeof pattern === "string" && pattern.trim() !== "") {
+        let re = null;
+        try {
+          re = new RegExp(pattern);
+        } catch (e) {
+          re = null; // a malformed admin regex must never crash generation
+        }
+        if (re && !re.test(v)) {
+          throw new PromptValidationError(`"${field.label}" is not in the expected format.`, field.key);
+        }
+      }
+      return v;
+    }
   }
+}
+
+/**
+ * Save-time check (admin): every {{placeholder}} in the prompt must have a
+ * matching field. Throws listing the unbacked placeholders. An unused field
+ * (defined but not referenced) is intentionally NOT an error here - the
+ * dashboard surfaces that as a non-blocking warning.
+ */
+function validatePromptFields(prompt, fields = []) {
+  const keys = new Set(
+    (fields || []).map((f) => f.key ?? f.field_key).filter(Boolean)
+  );
+  const missing = [...extractPlaceholders(prompt)].filter((k) => !keys.has(k));
+  if (missing.length > 0) {
+    throw new PromptValidationError(
+      `Prompt references placeholder(s) with no matching field: ${missing.map((k) => `{{${k}}}`).join(", ")}.`
+    );
+  }
+  return true;
 }
 
 /**
@@ -283,4 +320,5 @@ module.exports = {
   buildFinalPrompt,
   validateFieldDefinition,
   assertUniqueKeys,
+  validatePromptFields,
 };

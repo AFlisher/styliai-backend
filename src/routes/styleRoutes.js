@@ -14,6 +14,9 @@ const optionalAuthMiddleware = require("../middleware/optionalAuthMiddleware");
 router.get("/", optionalAdminAuth, optionalAuthMiddleware, styleController.getStyles);
 router.get("/:id/similar", recommendationController.getSimilarStyles);
 router.post("/", adminAuthMiddleware, styleController.createStyle);
+// Admin-only live prompt preview - renders the final prompt with sample
+// values. Placed before "/:id" routes so "prompt-preview" isn't captured as an id.
+router.post("/prompt-preview", adminAuthMiddleware, styleController.previewPrompt);
 router.put("/reorder", adminAuthMiddleware, styleController.reorderStyles);
 router.put("/:id", adminAuthMiddleware, styleController.updateStyle);
 router.delete("/:id", adminAuthMiddleware, styleController.deleteStyle);
