@@ -143,9 +143,24 @@ async function query(text, params = []) {
     return { rows: [], rowCount: 0 };
   }
 
-  // ---- users: INSERT (register) ----
+  // ---- users: INSERT ----
   if (q.includes("INSERT INTO public.users")) {
-    // Known register shape: (id, full_name, email, password_hash,
+    if (q.includes("google_id")) {
+      // Google shape: (id, full_name, email, password_hash=NULL,
+      // email_verified=true, google_id, provider='google', avatar_url)
+      seedUser({
+        id: params[0],
+        full_name: params[1],
+        email: params[2],
+        password_hash: null,
+        google_id: params[3],
+        avatar_url: params[4],
+        email_verified: true,
+        provider: "google",
+      });
+      return { rows: [], rowCount: 1 };
+    }
+    // Register shape: (id, full_name, email, password_hash,
     // email_verified=false, verification_token_hash, provider='email')
     seedUser({
       id: params[0],
@@ -157,6 +172,15 @@ async function query(text, params = []) {
       provider: "email",
     });
     return { rows: [], rowCount: 1 };
+  }
+
+  // ---- users: wallet-info projection (aliased columns) ----
+  if (q.includes('ads_progress AS "adsProgress"')) {
+    const user = findUserBy((u) => u.id === params[0]);
+    return {
+      rows: user ? [{ adsProgress: user.ads_progress ?? 0, generatedImages: user.generated_images ?? 0 }] : [],
+      rowCount: user ? 1 : 0,
+    };
   }
 
   // ---- users: SELECT ----
@@ -174,7 +198,13 @@ async function query(text, params = []) {
   if (q.includes("UPDATE public.users")) {
     const user = findUserBy((u) => u.id === last);
     if (!user) return { rows: [], rowCount: 0 };
-    if (q.includes("email_verified = true")) {
+    if (q.includes("google_id = $1")) {
+      // Link an existing email account to Google.
+      user.google_id = params[0];
+      user.provider = "google";
+      user.email_verified = true;
+      user.avatar_url = params[1];
+    } else if (q.includes("email_verified = true")) {
       user.email_verified = true;
       user.verification_token_hash = null;
     } else if (q.includes("reset_token_hash = $1, reset_token_expires_at = $2")) {
