@@ -2,6 +2,20 @@ const styleModel = require("../models/styleModel");
 const categoryModel = require("../models/categoryModel");
 const recommendationService = require("../services/recommendationService");
 const autoTagService = require("../services/autoTagService");
+const { PromptValidationError, assertUniqueKeys } = require("../utils/promptTemplate");
+
+/**
+ * Validates admin-supplied dynamic field definitions before any DB write, so a
+ * bad set is rejected with 400 up front. `undefined` means "leave fields
+ * untouched"; an array (incl. empty) is validated and will be persisted.
+ */
+function validateFieldsInput(fields) {
+  if (fields === undefined) return;
+  if (!Array.isArray(fields)) {
+    throw new PromptValidationError("fields must be an array.");
+  }
+  assertUniqueKeys(fields);
+}
 
 async function resolveCategoryName(categoryId) {
   const categories = await categoryModel.getAllCategories();
@@ -86,6 +100,7 @@ async function createStyle(req, res) {
       sortOrder,
       tagIds = [],
       autoAssignTags = true,
+      fields,
     } = req.body;
 
     if (!categoryId) {
@@ -105,6 +120,8 @@ async function createStyle(req, res) {
         message: "Prompt is required.",
       });
     }
+
+    validateFieldsInput(fields);
 
     let parsedCreditCost = 1;
     if (creditCost !== undefined) {
@@ -152,12 +169,17 @@ async function createStyle(req, res) {
       sortOrder,
       tagIds: finalTagIds,
       tagsAutoAssigned,
+      fields,
     });
     recommendationService.invalidateCandidateCache();
 
     res.status(201).json(style);
 
   } catch (err) {
+    if (err instanceof PromptValidationError) {
+      return res.status(400).json({ message: err.message });
+    }
+
     console.error(err);
 
     if (err.code === "23505") {
@@ -189,6 +211,7 @@ async function updateStyle(req, res) {
       sortOrder = 0,
       tagIds,
       autoAssignTags,
+      fields,
     } = req.body;
 
     if (!categoryId) {
@@ -208,6 +231,8 @@ async function updateStyle(req, res) {
         message: "Prompt is required.",
       });
     }
+
+    validateFieldsInput(fields);
 
     let parsedCreditCost = 1;
     if (creditCost !== undefined) {
@@ -265,6 +290,7 @@ async function updateStyle(req, res) {
       sortOrder,
       tagIds: finalTagIds,
       tagsAutoAssigned,
+      fields,
     });
 
     if (!style) {
@@ -277,6 +303,10 @@ async function updateStyle(req, res) {
     return res.json(style);
 
   } catch (err) {
+    if (err instanceof PromptValidationError) {
+      return res.status(400).json({ message: err.message });
+    }
+
     console.error(err);
 
     if (err.code === "23505") {

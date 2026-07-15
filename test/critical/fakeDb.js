@@ -19,6 +19,7 @@ const state = {
   dailyRewards: [], // { userId, claimed }
   walletTransactions: [], // { userId, amount, type, description }
   styles: [],
+  styleFields: [], // rows in DB shape: { style_id, field_key, label, type, required, placeholder, options, config, sort_order }
 };
 
 function reset() {
@@ -27,6 +28,7 @@ function reset() {
   state.dailyRewards = [];
   state.walletTransactions = [];
   state.styles = [];
+  state.styleFields = [];
 }
 
 function seedUser(u) {
@@ -79,6 +81,22 @@ function seedStyle(s) {
     ...s,
   };
   state.styles.push(style);
+  // Optionally seed dynamic input fields (DB row shape) for this style.
+  if (Array.isArray(s.fields)) {
+    s.fields.forEach((f, i) => {
+      state.styleFields.push({
+        style_id: style.id,
+        field_key: f.key ?? f.field_key,
+        label: f.label ?? f.key,
+        type: f.type ?? "text",
+        required: Boolean(f.required),
+        placeholder: f.placeholder ?? null,
+        options: f.options ?? null,
+        config: f.config ?? {},
+        sort_order: f.sortOrder ?? i,
+      });
+    });
+  }
   return style;
 }
 
@@ -142,6 +160,32 @@ async function query(text, params = []) {
       .slice()
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     return { rows, rowCount: rows.length };
+  }
+
+  // ---- style_fields (dynamic input field definitions) ----
+  if (q.startsWith("SELECT") && q.includes("FROM style_fields")) {
+    let rows;
+    if (q.includes("= ANY($1)")) {
+      const ids = params[0] || [];
+      rows = state.styleFields.filter((f) => ids.includes(f.style_id));
+    } else {
+      rows = state.styleFields.filter((f) => f.style_id === params[0]);
+    }
+    rows = rows.slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    return { rows, rowCount: rows.length };
+  }
+  if (q.includes("DELETE FROM style_fields")) {
+    state.styleFields = state.styleFields.filter((f) => f.style_id !== params[0]);
+    return { rows: [], rowCount: 0 };
+  }
+  if (q.includes("INSERT INTO style_fields")) {
+    state.styleFields.push({
+      style_id: params[0], field_key: params[1], label: params[2], type: params[3],
+      required: params[4], placeholder: params[5],
+      options: params[6] ? JSON.parse(params[6]) : null,
+      config: params[7] ? JSON.parse(params[7]) : {}, sort_order: params[8],
+    });
+    return { rows: [], rowCount: 1 };
   }
 
   // ---- styles (getStyleById) ----
