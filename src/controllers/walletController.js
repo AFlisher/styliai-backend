@@ -10,7 +10,9 @@ async function verifyAdMobSSVSignature(req, signature, keyId) {
   try {
     const res = await fetch("https://www.gstatic.com/admob/reward/keys-v1.json");
     const { keys } = await res.json();
-    const keyObj = keys.find(k => k.keyId === keyId);
+    // Google publishes keyId as a number; the callback's key_id query param
+    // arrives as a string - compare loosely-normalized or no key ever matches.
+    const keyObj = keys.find(k => String(k.keyId) === String(keyId));
     if (!keyObj) return false;
 
     const publicKeyPem = keyObj.pem;
@@ -100,6 +102,19 @@ async function getWalletHistory(req, res, next) {
  */
 async function rewardAd(req, res, next) {
   try {
+    // This path trusts the client's claim of having watched an ad (bounded
+    // by the 1-credit/day cap). Once the AdMob SSV callback below is
+    // confirmed working in production, set ENABLE_CLIENT_AD_REWARD=false to
+    // retire it and rely exclusively on Google's signed server-to-server
+    // callback. Read at request time so tests and ops can flip it live.
+    if (process.env.ENABLE_CLIENT_AD_REWARD === "false") {
+      return next(new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        "Client-reported ad rewards are disabled. Rewards are granted via verified AdMob callbacks only.",
+        403
+      ));
+    }
+
     const userId = req.user.id;
 
     const result = await walletService.rewardAd(userId);
@@ -148,24 +163,32 @@ async function verifyRewardedAd(req, res, next) {
       return next(new AppError(ErrorCodes.VALIDATION_ERROR, "Invalid AdMob SSV signature", 400));
     }
 
-    // Check duplicate transaction_id to prevent duplicate claims
-    const dupCheck = await db.query(
-      "SELECT transaction_id FROM processed_ad_transactions WHERE transaction_id = $1",
-      [transactionId]
+    // Claim the transaction_id BEFORE granting the reward. The primary key
+    // on transaction_id makes this atomic: of two concurrent identical
+    // callbacks, exactly one insert succeeds (rowCount 1) and the other sees
+    // rowCount 0 - unlike the previous SELECT-then-INSERT, which both could
+    // pass before either committed.
+    const claim = await db.query(
+      "INSERT INTO processed_ad_transactions (transaction_id, user_id, reward_amount) VALUES ($1, $2, $3) ON CONFLICT (transaction_id) DO NOTHING",
+      [transactionId, userId, reward_amount ? Number(reward_amount) : 1]
     );
 
-    if (dupCheck.rows.length > 0) {
+    if (claim.rowCount === 0) {
       return res.status(200).json({ message: "Duplicate transaction ignored" });
     }
 
-    // Call existing wallet reward logic
-    const rewardResult = await walletService.rewardAd(userId);
-
-    // Save transaction_id to avoid replay/duplicate grants
-    await db.query(
-      "INSERT INTO processed_ad_transactions (transaction_id, user_id, reward_amount) VALUES ($1, $2, $3)",
-      [transactionId, userId, reward_amount ? Number(reward_amount) : 1]
-    );
+    // Grant the reward; if it fails, release the claimed transaction_id so
+    // AdMob's retry of the same callback isn't permanently swallowed.
+    let rewardResult;
+    try {
+      rewardResult = await walletService.rewardAd(userId);
+    } catch (rewardErr) {
+      await db.query(
+        "DELETE FROM processed_ad_transactions WHERE transaction_id = $1",
+        [transactionId]
+      );
+      throw rewardErr;
+    }
 
     return res.status(200).json({
       success: true,
