@@ -640,6 +640,41 @@ paths:
         '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '409': { description: Category still has styles, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
+  /api/styles/prompt-preview:
+    post:
+      summary: >
+        Admin-only live prompt preview. Renders the final prompt from a prompt +
+        field definitions + sample values using the same engine as generation,
+        so the dashboard preview matches production exactly. Never exposed to
+        non-admins.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt: { type: string }
+                fields:
+                  type: array
+                  items: { $ref: '#/components/schemas/StyleField' }
+                values:
+                  type: object
+                  additionalProperties: true
+              required: [prompt]
+      responses:
+        '200':
+          description: Rendered prompt
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prompt: { type: string }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '401': { description: Unauthorized }
+
   /api/styles:
     get:
       summary: >
