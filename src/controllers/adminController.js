@@ -1,11 +1,21 @@
 const bcrypt = require("bcrypt");
 const db = require("../config/db");
 const jwt = require("jsonwebtoken");
+const { z } = require("zod");
 const walletService = require("../services/wallet/walletService");
+
+const adminLoginSchema = z.object({
+  email: z.string().email("Invalid email format"),
+  password: z.string().min(1, "Password is required"),
+});
 
 async function login(req, res) {
   try {
-    const { email, password } = req.body;
+    const parsed = adminLoginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.issues[0].message });
+    }
+    const { email, password } = parsed.data;
 
     const result = await db.query(
       `SELECT id, email, full_name, password_hash
@@ -41,7 +51,10 @@ async function login(req, res) {
       },
       process.env.ADMIN_JWT_SECRET,
       {
-        expiresIn: "12h"
+        // Short-lived by default: the token lives in the dashboard's
+        // localStorage with no server-side revocation, so its lifetime is
+        // the whole exposure window if it's ever exfiltrated.
+        expiresIn: process.env.ADMIN_JWT_EXPIRES_IN || "2h"
       }
     );
 

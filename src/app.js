@@ -24,7 +24,9 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdnjs.cloudflare.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com", "https://cdnjs.cloudflare.com"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      // The served pages (verify / reset-password) contain no scripts at
+      // all, so inline script execution stays blocked (XSS defense-in-depth).
+      scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "blob:"]
     }
   }
