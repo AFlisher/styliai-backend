@@ -85,7 +85,7 @@ function extensionFromMime(mimeType) {
 /**
  * Main generation pipeline.
  */
-async function generate(file, styleId) {
+async function generate(file, styleId, finalPrompt) {
   // Load style
   const style = await styleModel.getStyleById(styleId);
 
@@ -97,8 +97,11 @@ async function generate(file, styleId) {
     throw new Error("Style is disabled.");
   }
 
-  // Build prompt
+  // Build prompt. When the controller has already resolved the dynamic
+  // template server-side (finalPrompt), use it verbatim; otherwise fall back
+  // to the style's raw prompt (styles with no placeholders / legacy callers).
   const promptData = promptBuilder.buildPrompt(style);
+  const resolvedPrompt = finalPrompt != null ? finalPrompt : promptData.prompt;
 
   // Choose provider
   const provider = getProvider();
@@ -107,7 +110,7 @@ async function generate(file, styleId) {
   const generatedBuffer = await provider.generateImage({
     imageBuffer: file.buffer,
     mimeType: file.mimetype,
-    prompt: promptData.prompt,
+    prompt: resolvedPrompt,
     negativePrompt: promptData.negativePrompt,
   });
 

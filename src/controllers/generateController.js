@@ -4,6 +4,26 @@ const styleModel = require("../models/styleModel");
 const creationsModel = require("../models/creationsModel");
 const notificationModel = require("../models/notificationModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
+const { buildFinalPrompt, PromptValidationError } = require("../utils/promptTemplate");
+
+/**
+ * Parses the multipart `fieldValues` part (a JSON string) into an object.
+ * Absent/blank -> {}. Malformed JSON or a non-object -> validation error.
+ */
+function parseFieldValues(raw) {
+  if (raw === undefined || raw === null || raw === "") return {};
+  if (typeof raw === "object") return raw;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    throw new AppError(ErrorCodes.VALIDATION_ERROR, "fieldValues must be valid JSON.", 400);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new AppError(ErrorCodes.VALIDATION_ERROR, "fieldValues must be a JSON object.", 400);
+  }
+  return parsed;
+}
 
 /**
  * Controller to handle AI style generation requests.
@@ -33,6 +53,27 @@ async function generateImage(req, res, next) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, "Style is disabled.", 400);
     }
 
+    // 1b. Resolve the dynamic prompt template server-side and validate the
+    // user's field values BEFORE any charge. This rejects missing required
+    // fields, bad types, unknown placeholders, and injection attempts, and
+    // guarantees no unresolved {{token}} ever reaches the provider. Styles
+    // with no placeholders resolve to their prompt unchanged (backward
+    // compatible). Runs before deduction so invalid input costs nothing.
+    let finalPrompt;
+    try {
+      const fieldValues = parseFieldValues(req.body.fieldValues);
+      finalPrompt = buildFinalPrompt({
+        prompt: style.prompt,
+        fields: style.fields || [],
+        values: fieldValues,
+      });
+    } catch (err) {
+      if (err instanceof PromptValidationError) {
+        throw new AppError(ErrorCodes.VALIDATION_ERROR, err.message, 400);
+      }
+      throw err;
+    }
+
     // 2. Atomically check-and-deduct BEFORE calling the AI provider. deductBalance
     // is row-locked, so this closes the race window a separate getBalance()
     // pre-check would leave open, and avoids incurring AI provider cost for
@@ -48,7 +89,7 @@ async function generateImage(req, res, next) {
     // 3. Invoke generation orchestration service (uploads image, calls AI)
     let generatedImageUrl;
     try {
-      generatedImageUrl = await generationService.generate(req.file, styleId);
+      generatedImageUrl = await generationService.generate(req.file, styleId, finalPrompt);
     } catch (genErr) {
       // Generation failed after the charge already succeeded - refund so the
       // user isn't charged for a failed generation. A refund failure is a

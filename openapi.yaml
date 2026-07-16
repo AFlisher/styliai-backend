@@ -118,7 +118,45 @@ components:
         tagsAutoAssigned:
           type: boolean
           description: Admin-only. True if tagIds was last set by autoTagService rather than a manual dashboard edit - controls whether a future save re-runs classification or preserves a manual override.
+        fields:
+          type: array
+          description: >
+            Dynamic input fields backing the prompt's {{placeholder}} tokens.
+            Empty for classic styles. Returned on both admin and public reads
+            (the field definitions are safe to expose; the prompt is not).
+          items: { $ref: '#/components/schemas/StyleField' }
       required: [id, categoryId, name, prompt, negativePrompt, coverImage, creditCost, isTrending, isPremium, isEnabled, sortOrder]
+
+    StyleField:
+      type: object
+      description: One dynamic input field for a style's prompt template.
+      properties:
+        key:
+          type: string
+          description: Placeholder key referenced as {{key}} in the prompt (lower_snake_case).
+        label: { type: string }
+        type:
+          type: string
+          enum: [text, textarea, number, dropdown, checkbox, color, date]
+          description: Control type. New types may be added without breaking older clients.
+        required: { type: boolean }
+        placeholder: { type: string, nullable: true }
+        options:
+          type: array
+          nullable: true
+          description: For dropdown fields.
+          items:
+            type: object
+            properties:
+              value: { type: string }
+              label: { type: string }
+            required: [value, label]
+        config:
+          type: object
+          additionalProperties: true
+          description: Extensible per-type knobs (e.g. min, max, maxLength, default, trueText).
+        sortOrder: { type: integer }
+      required: [key, label, type, required]
 
     Tag:
       type: object
@@ -602,6 +640,41 @@ paths:
         '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '409': { description: Category still has styles, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
+  /api/styles/prompt-preview:
+    post:
+      summary: >
+        Admin-only live prompt preview. Renders the final prompt from a prompt +
+        field definitions + sample values using the same engine as generation,
+        so the dashboard preview matches production exactly. Never exposed to
+        non-admins.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt: { type: string }
+                fields:
+                  type: array
+                  items: { $ref: '#/components/schemas/StyleField' }
+                values:
+                  type: object
+                  additionalProperties: true
+              required: [prompt]
+      responses:
+        '200':
+          description: Rendered prompt
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prompt: { type: string }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '401': { description: Unauthorized }
+
   /api/styles:
     get:
       summary: >
@@ -663,6 +736,10 @@ paths:
                   type: boolean
                   default: true
                   description: When true (default), tagIds is computed by autoTagService from name/prompt/category and any client-sent tagIds is ignored. Set false to use tagIds as a manual override.
+                fields:
+                  type: array
+                  description: Dynamic input field definitions. Replaces the style's full field set. Omit to leave unchanged.
+                  items: { $ref: '#/components/schemas/StyleField' }
               required: [categoryId, name, prompt]
       responses:
         '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
@@ -751,6 +828,31 @@ paths:
         '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
         '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '409': { description: Duplicate name in category, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+    patch:
+      summary: >
+        Partially update a style's quick-toggle flags (Trending /
+        Enable-Disable). Unlike PUT, no full payload is required and no other
+        field is touched. At least one of isTrending/isEnabled must be sent.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                isTrending: { type: boolean }
+                isEnabled: { type: boolean }
+              minProperties: 1
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
     delete:
       summary: Delete a style.
       security: [{ adminBearerAuth: [] }]

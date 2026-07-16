@@ -1,4 +1,5 @@
 const db = require("../config/db");
+const styleFieldsModel = require("./styleFieldsModel");
 
 async function getAllStyles() {
   const result = await db.query(`
@@ -20,7 +21,7 @@ async function getAllStyles() {
     ORDER BY sort_order ASC, created_at ASC
   `);
 
-  return result.rows;
+  return attachFields(result.rows);
 }
 
 async function getStyles(filters = {}) {
@@ -73,7 +74,7 @@ async function getStyles(filters = {}) {
   query += ` GROUP BY s.id ORDER BY s.sort_order ASC, s.created_at ASC`;
 
   const result = await db.query(query, params);
-  return result.rows;
+  return attachFields(result.rows);
 }
 
 /**
@@ -126,7 +127,7 @@ async function getPublicStyles(filters = {}) {
   query += ` ORDER BY sort_order ASC, created_at ASC`;
 
   const result = await db.query(query, params);
-  return result.rows;
+  return attachFields(result.rows);
 }
 
 /**
@@ -158,7 +159,7 @@ async function getPublicStylesByIds(ids) {
     [ids]
   );
 
-  return result.rows;
+  return attachFields(result.rows);
 }
 
 async function getStyleById(id) {
@@ -188,7 +189,20 @@ async function getStyleById(id) {
     [id]
   );
 
-  return result.rows[0];
+  const style = result.rows[0];
+  if (!style) return style;
+  style.fields = await styleFieldsModel.getFieldsForStyle(style.id);
+  return style;
+}
+
+/** Attaches each style's dynamic input fields, batched to avoid an N+1. */
+async function attachFields(rows) {
+  if (!rows || rows.length === 0) return rows;
+  const byId = await styleFieldsModel.getFieldsForStyleIds(rows.map((r) => r.id));
+  for (const row of rows) {
+    row.fields = byId.get(row.id) || [];
+  }
+  return rows;
 }
 
 /**
@@ -325,6 +339,9 @@ async function createStyle(style) {
 
     const styleId = result.rows[0].id;
     await setStyleTags(client, styleId, style.tagIds ?? []);
+    if (style.fields !== undefined) {
+      await styleFieldsModel.replaceFields(client, styleId, style.fields);
+    }
 
     await client.query("COMMIT");
 
@@ -385,6 +402,9 @@ async function updateStyle(id, style) {
     if (style.tagIds !== undefined) {
       await setStyleTags(client, id, style.tagIds);
     }
+    if (style.fields !== undefined) {
+      await styleFieldsModel.replaceFields(client, id, style.fields);
+    }
 
     await client.query("COMMIT");
 
@@ -395,6 +415,49 @@ async function updateStyle(id, style) {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Partial flag update for the Admin Dashboard's quick toggle actions
+ * (Trending / Enable-Disable). Only the flags actually provided are
+ * written - name/prompt/tags/sort order and every other column are left
+ * untouched, unlike updateStyle's full-replace semantics.
+ */
+async function updateStyleFlags(id, flags = {}) {
+  const sets = [];
+  const params = [];
+
+  if (flags.isTrending !== undefined) {
+    params.push(flags.isTrending);
+    sets.push(`is_trending = $${params.length}`);
+  }
+
+  if (flags.isEnabled !== undefined) {
+    params.push(flags.isEnabled);
+    sets.push(`is_enabled = $${params.length}`);
+  }
+
+  if (sets.length === 0) {
+    return getStyleById(id);
+  }
+
+  params.push(id);
+  const result = await db.query(
+    `
+    UPDATE styles
+    SET ${sets.join(", ")},
+        updated_at = NOW()
+    WHERE id = $${params.length}
+    RETURNING id
+    `,
+    params
+  );
+
+  if (result.rows.length === 0) {
+    return undefined;
+  }
+
+  return getStyleById(id);
 }
 
 async function deleteStyle(id) {
@@ -450,6 +513,7 @@ module.exports = {
   setStyleTagsAutoAssigned,
   createStyle,
   updateStyle,
+  updateStyleFlags,
   deleteStyle,
   reorderStyles,
 };

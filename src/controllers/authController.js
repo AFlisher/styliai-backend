@@ -7,6 +7,8 @@ const { OAuth2Client } = require('google-auth-library');
 const db = require('../config/db');
 const sendEmail = require('../utils/sendEmail');
 const { renderVerificationPage, renderResetPasswordPage } = require('../utils/htmlTemplates');
+const { passwordSchema, PASSWORD_POLICY_MESSAGE } = require('../utils/passwordPolicy');
+const escapeHtml = require('../utils/escapeHtml');
 const notificationModel = require('../models/notificationModel');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID;
@@ -23,7 +25,7 @@ function hashToken(token) {
 // Validation schemas using Zod
 const registerSchema = z.object({
   email: z.string().email("Invalid email format"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
+  password: passwordSchema,
   fullName: z.string().min(1, "Full name is required")
 });
 
@@ -38,7 +40,7 @@ const forgotPasswordSchema = z.object({
 
 const resetPasswordSchema = z.object({
   token: z.string().uuid("Invalid reset token format"),
-  password: z.string().min(8, "Password must be at least 8 characters")
+  password: passwordSchema
 });
 
 // Helper to generate JWT access tokens signed with the Supabase JWT secret
@@ -92,11 +94,13 @@ async function register(req, res) {
     // BEGIN transaction
     await client.query('BEGIN');
 
-    // Save user inside PostgreSQL (public.users)
+    // Save user inside PostgreSQL (public.users). Only the SHA-256 hash of
+    // the verification token is stored, so a DB/backup leak can't be used to
+    // verify arbitrary accounts - same handling as reset_token_hash.
     await client.query(`
-      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token, provider)
+      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token_hash, provider)
       VALUES ($1, $2, $3, $4, false, $5, 'email')
-    `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, verificationToken]);
+    `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, hashToken(verificationToken)]);
 
     // Save corresponding profile inside public.profiles
     await client.query(`
@@ -120,7 +124,7 @@ async function register(req, res) {
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
         <h2 style="color: #A855F7; text-align: center;">Welcome to StyliAI!</h2>
-        <p>Hello ${validated.fullName},</p>
+        <p>Hello ${escapeHtml(validated.fullName)},</p>
         <p>Thank you for registering. Please confirm your email address by clicking the button below:</p>
         <div style="text-align: center; margin: 30px 0;">
           <a href="${verificationLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; box-shadow: 0 4px 15px rgba(168, 85, 247, 0.4);">Verify Email Address</a>
@@ -156,7 +160,7 @@ async function register(req, res) {
     }
 
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: err.errors[0].message });
+      return res.status(400).json({ message: err.issues[0].message });
     }
     
     if (err.message === "verification_email_failed") {
@@ -187,8 +191,8 @@ async function verifyEmail(req, res) {
 
   try {
     const result = await db.query(
-      'SELECT id, email_verified FROM public.users WHERE verification_token = $1',
-      [token]
+      'SELECT id, email_verified FROM public.users WHERE verification_token_hash = $1',
+      [hashToken(token)]
     );
 
     if (result.rows.length === 0) {
@@ -203,7 +207,7 @@ async function verifyEmail(req, res) {
 
     // Verify user and clear the token
     await db.query(
-      'UPDATE public.users SET email_verified = true, verification_token = NULL WHERE id = $1',
+      'UPDATE public.users SET email_verified = true, verification_token_hash = NULL WHERE id = $1',
       [user.id]
     );
 
@@ -239,6 +243,12 @@ async function login(req, res) {
 
     const user = userRes.rows[0];
 
+    // Google-only accounts have no password hash - reject with the same
+    // generic 401 instead of letting bcrypt.compare throw a 500.
+    if (!user.password_hash) {
+      return res.status(401).json({ message: "Invalid email or password." });
+    }
+
     // Compare passwords
     const match = await bcrypt.compare(validated.password, user.password_hash);
     if (!match) {
@@ -271,7 +281,7 @@ async function login(req, res) {
 
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: err.errors[0].message });
+      return res.status(400).json({ message: err.issues[0].message });
     }
     console.error("Login error:", err);
     res.status(500).json({ message: "An unexpected error occurred." });
@@ -352,7 +362,7 @@ async function forgotPassword(req, res) {
       const emailHtml = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
           <h2 style="color: #E735F6; text-align: center;">Reset Your Password</h2>
-          <p>Hello ${user.full_name},</p>
+          <p>Hello ${escapeHtml(user.full_name)},</p>
           <p>We received a request to reset your password. Click the button below to choose a new password. This link is valid for 1 hour.</p>
           <div style="text-align: center; margin: 30px 0;">
             <a href="${resetLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; box-shadow: 0 4px 15px rgba(231, 53, 246, 0.4);">Reset Password</a>
@@ -374,7 +384,7 @@ async function forgotPassword(req, res) {
 
   } catch (err) {
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ message: err.errors[0].message });
+      return res.status(400).json({ message: err.issues[0].message });
     }
     console.error("Forgot password error:", err);
     res.status(500).json({ message: "An unexpected error occurred." });
@@ -444,24 +454,12 @@ async function postResetPassword(req, res) {
       }));
     }
 
-    // Password requirements validation checks (uppercase, lowercase, digit, special character)
-    const passwordVal = validated.password;
-    const hasUpper = /[A-Z]/.test(passwordVal);
-    const hasLower = /[a-z]/.test(passwordVal);
-    const hasDigit = /[0-9]/.test(passwordVal);
-    const hasSpecial = /[!@#\$&*~]/.test(passwordVal);
-
-    if (!hasUpper || !hasLower || !hasDigit || !hasSpecial) {
-      return res.status(400).send(renderResetPasswordPage({
-        token: validated.token,
-        error: "Password does not meet requirements. It must contain at least 1 uppercase letter, 1 lowercase letter, 1 digit, and 1 special character (!@#$&*~)."
-      }));
-    }
-
-    // Hash new password and clear the reset token
-    const newPasswordHash = await bcrypt.hash(passwordVal, 10);
+    // Hash new password, clear the reset token, and revoke the refresh token
+    // so any session an attacker may already hold dies with the old password
+    // (complexity rules are enforced by resetPasswordSchema above).
+    const newPasswordHash = await bcrypt.hash(validated.password, 10);
     await db.query(
-      'UPDATE public.users SET password_hash = $1, reset_token_hash = NULL, reset_token_expires_at = NULL WHERE id = $2',
+      'UPDATE public.users SET password_hash = $1, reset_token_hash = NULL, reset_token_expires_at = NULL, refresh_token_hash = NULL WHERE id = $2',
       [newPasswordHash, user.id]
     );
 
@@ -475,7 +473,7 @@ async function postResetPassword(req, res) {
     if (err instanceof z.ZodError) {
       return res.status(400).send(renderResetPasswordPage({
         token: req.body.token,
-        error: err.errors[0].message
+        error: err.issues[0].message
       }));
     }
     console.error("Reset password POST error:", err);
@@ -517,7 +515,7 @@ async function resendVerification(req, res) {
 
   try {
     const userRes = await db.query(
-      'SELECT id, full_name, email_verified, verification_token FROM public.users WHERE email = $1',
+      'SELECT id, full_name, email_verified FROM public.users WHERE email = $1',
       [email.toLowerCase()]
     );
 
@@ -527,10 +525,10 @@ async function resendVerification(req, res) {
     // or their verification status.
     if (userRes.rows.length > 0 && !userRes.rows[0].email_verified) {
       const user = userRes.rows[0];
-      const token = user.verification_token || uuidv4();
-      if (!user.verification_token) {
-        await db.query('UPDATE public.users SET verification_token = $1 WHERE id = $2', [token, user.id]);
-      }
+      // Only the hash is stored, so the original token can't be re-sent -
+      // issue a fresh one on every resend (also invalidates older links).
+      const token = uuidv4();
+      await db.query('UPDATE public.users SET verification_token_hash = $1 WHERE id = $2', [hashToken(token), user.id]);
 
       const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
       const verificationLink = `${backendUrl}/api/auth/verify?token=${token}`;
@@ -538,7 +536,7 @@ async function resendVerification(req, res) {
       const emailHtml = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #05050A; color: #FFFFFF; border-radius: 12px; border: 1px solid #1E1E2F;">
           <h2 style="color: #A855F7; text-align: center;">Verify Your Email</h2>
-          <p>Hello ${user.full_name},</p>
+          <p>Hello ${escapeHtml(user.full_name)},</p>
           <p>Please confirm your email address by clicking the button below:</p>
           <div style="text-align: center; margin: 30px 0;">
             <a href="${verificationLink}" style="background: linear-gradient(135deg, #A855F7, #E735F6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Verify Email Address</a>
@@ -585,6 +583,11 @@ async function googleSignIn(req, res) {
 
     const payload = ticket.getPayload();
     const googleId = payload.sub;
+    // Tokens minted without the email scope have no email claim - reject
+    // cleanly instead of crashing on .toLowerCase().
+    if (!payload.email) {
+      return res.status(401).json({ message: 'Google account did not provide an email address.' });
+    }
     const email = payload.email.toLowerCase();
     const fullName = payload.name || payload.email.split('@')[0];
     const avatarUrl = payload.picture || null;
@@ -697,13 +700,14 @@ async function changePassword(req, res) {
       return res.status(400).json({ message: "Current password and new password are required." });
     }
 
-    if (newPassword.length < 8) {
-      return res.status(400).json({ message: "New password must be at least 8 characters." });
+    const policyCheck = passwordSchema.safeParse(newPassword);
+    if (!policyCheck.success) {
+      return res.status(400).json({ message: PASSWORD_POLICY_MESSAGE });
     }
 
     const userId = req.user.id;
     const userRes = await db.query(
-      'SELECT id, password_hash, provider FROM public.users WHERE id = $1',
+      'SELECT id, email, full_name, password_hash, provider FROM public.users WHERE id = $1',
       [userId]
     );
 
@@ -724,14 +728,22 @@ async function changePassword(req, res) {
       return res.status(400).json({ message: "Incorrect current password." });
     }
 
-    // Hash and update the new password
+    // Hash and update the new password, rotating the refresh token in the
+    // same statement: every other logged-in device/session is revoked, while
+    // the fresh token pair returned below keeps this session working.
+    const newAccessToken = generateAccessToken(user);
+    const newRefreshToken = generateRefreshToken(user);
     const newHash = await bcrypt.hash(newPassword, 10);
     await db.query(
-      'UPDATE public.users SET password_hash = $1 WHERE id = $2',
-      [newHash, userId]
+      'UPDATE public.users SET password_hash = $1, refresh_token_hash = $2 WHERE id = $3',
+      [newHash, hashToken(newRefreshToken), userId]
     );
 
-    res.json({ message: "Password changed successfully." });
+    res.json({
+      message: "Password changed successfully.",
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken
+    });
 
   } catch (err) {
     console.error("Change password error:", err);
