@@ -2,6 +2,7 @@ const generationService = require("../services/generation/generationService");
 const walletService = require("../services/wallet/walletService");
 const styleModel = require("../models/styleModel");
 const creationsModel = require("../models/creationsModel");
+const notificationModel = require("../models/notificationModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
 const { buildFinalPrompt, PromptValidationError } = require("../utils/promptTemplate");
 
@@ -128,6 +129,19 @@ async function generateImage(req, res, next) {
       });
     } catch (creationErr) {
       console.error("[generateImage] Failed to record creation history:", creationErr.message);
+    }
+
+    // Feed entry for the Notifications screen. Best-effort for the same
+    // reason as the creation record above.
+    try {
+      await notificationModel.createNotification({
+        userId,
+        type: "generation",
+        title: "Your image is ready",
+        body: `Your photo was styled with ${style.name}. Check it out in My Creations.`,
+      });
+    } catch (notifErr) {
+      console.error("[generateImage] Failed to create notification:", notifErr.message);
     }
 
     // 5. Return JSON payload

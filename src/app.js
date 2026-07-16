@@ -14,6 +14,7 @@ const walletRoutes = require("./routes/walletRoutes");
 const creditPackRoutes = require("./routes/creditPackRoutes");
 const favoritesRoutes = require("./routes/favoritesRoutes");
 const creationsRoutes = require("./routes/creationsRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/credit-packs', creditPackRoutes);
 app.use('/api/favorites', favoritesRoutes);
 app.use('/api/creations', creationsRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Default endpoint
 app.get('/', (req, res) => {

@@ -20,6 +20,7 @@ const state = {
   walletTransactions: [], // { userId, amount, type, description }
   styles: [],
   styleFields: [], // rows in DB shape: { style_id, field_key, label, type, required, placeholder, options, config, sort_order }
+  notifications: [], // { user_id, type, title, body, is_read }
 };
 
 function reset() {
@@ -29,6 +30,7 @@ function reset() {
   state.walletTransactions = [];
   state.styles = [];
   state.styleFields = [];
+  state.notifications = [];
 }
 
 function seedUser(u) {
@@ -202,6 +204,20 @@ async function query(text, params = []) {
   // ---- profiles ----
   if (q.includes("public.profiles")) {
     return { rows: [], rowCount: 0 };
+  }
+
+  // ---- notifications (register/google sign-up seed a welcome row;
+  // generation success adds an "image ready" row) ----
+  if (q.includes("INSERT INTO notifications")) {
+    state.notifications.push({
+      id: `n-${state.notifications.length + 1}`,
+      user_id: params[0],
+      type: params[1],
+      title: params[2],
+      body: params[3],
+      is_read: false,
+    });
+    return { rows: [], rowCount: 1 };
   }
 
   // ---- users: INSERT ----
