@@ -828,6 +828,31 @@ paths:
         '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
         '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '409': { description: Duplicate name in category, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+    patch:
+      summary: >
+        Partially update a style's quick-toggle flags (Trending /
+        Enable-Disable). Unlike PUT, no full payload is required and no other
+        field is touched. At least one of isTrending/isEnabled must be sent.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                isTrending: { type: boolean }
+                isEnabled: { type: boolean }
+              minProperties: 1
+      responses:
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/Style' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '404': { description: Not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
     delete:
       summary: Delete a style.
       security: [{ adminBearerAuth: [] }]

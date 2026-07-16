@@ -417,6 +417,49 @@ async function updateStyle(id, style) {
   }
 }
 
+/**
+ * Partial flag update for the Admin Dashboard's quick toggle actions
+ * (Trending / Enable-Disable). Only the flags actually provided are
+ * written - name/prompt/tags/sort order and every other column are left
+ * untouched, unlike updateStyle's full-replace semantics.
+ */
+async function updateStyleFlags(id, flags = {}) {
+  const sets = [];
+  const params = [];
+
+  if (flags.isTrending !== undefined) {
+    params.push(flags.isTrending);
+    sets.push(`is_trending = $${params.length}`);
+  }
+
+  if (flags.isEnabled !== undefined) {
+    params.push(flags.isEnabled);
+    sets.push(`is_enabled = $${params.length}`);
+  }
+
+  if (sets.length === 0) {
+    return getStyleById(id);
+  }
+
+  params.push(id);
+  const result = await db.query(
+    `
+    UPDATE styles
+    SET ${sets.join(", ")},
+        updated_at = NOW()
+    WHERE id = $${params.length}
+    RETURNING id
+    `,
+    params
+  );
+
+  if (result.rows.length === 0) {
+    return undefined;
+  }
+
+  return getStyleById(id);
+}
+
 async function deleteStyle(id) {
   const result = await db.query(
     `
@@ -470,6 +513,7 @@ module.exports = {
   setStyleTagsAutoAssigned,
   createStyle,
   updateStyle,
+  updateStyleFlags,
   deleteStyle,
   reorderStyles,
 };

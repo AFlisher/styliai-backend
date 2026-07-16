@@ -19,6 +19,7 @@ router.post("/", adminAuthMiddleware, styleController.createStyle);
 router.post("/prompt-preview", adminAuthMiddleware, styleController.previewPrompt);
 router.put("/reorder", adminAuthMiddleware, styleController.reorderStyles);
 router.put("/:id", adminAuthMiddleware, styleController.updateStyle);
+router.patch("/:id", adminAuthMiddleware, styleController.patchStyleFlags);
 router.delete("/:id", adminAuthMiddleware, styleController.deleteStyle);
 
 module.exports = router;

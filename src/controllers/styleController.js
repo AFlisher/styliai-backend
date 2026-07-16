@@ -331,6 +331,53 @@ async function updateStyle(req, res) {
   }
 }
 
+// PATCH /api/styles/:id - partial update for the Admin Dashboard's quick
+// toggle actions (Trending / Enable-Disable). Unlike the full-replace PUT
+// above, no complete style payload is required, so a toggle can never
+// wipe unrelated fields (name/prompt/tags/sort order stay untouched).
+async function patchStyleFlags(req, res) {
+  try {
+    const { id } = req.params;
+    const { isTrending, isEnabled } = req.body;
+
+    if (isTrending === undefined && isEnabled === undefined) {
+      return res.status(400).json({
+        message: "At least one of isTrending or isEnabled is required.",
+      });
+    }
+
+    if (isTrending !== undefined && typeof isTrending !== "boolean") {
+      return res.status(400).json({
+        message: "isTrending must be a boolean.",
+      });
+    }
+
+    if (isEnabled !== undefined && typeof isEnabled !== "boolean") {
+      return res.status(400).json({
+        message: "isEnabled must be a boolean.",
+      });
+    }
+
+    const style = await styleModel.updateStyleFlags(id, { isTrending, isEnabled });
+
+    if (!style) {
+      return res.status(404).json({
+        message: "Style not found.",
+      });
+    }
+    recommendationService.invalidateCandidateCache();
+
+    return res.json(style);
+
+  } catch (err) {
+    console.error(err);
+
+    return res.status(500).json({
+      message: "Failed to update style.",
+    });
+  }
+}
+
 async function deleteStyle(req, res) {
   try {
     const { id } = req.params;
@@ -415,6 +462,7 @@ module.exports = {
   getStyles,
   createStyle,
   updateStyle,
+  patchStyleFlags,
   deleteStyle,
   reorderStyles,
   previewPrompt,

@@ -3,6 +3,7 @@ jest.mock("../../models/styleModel", () => ({
   getPublicStyles: jest.fn(),
   createStyle: jest.fn(),
   updateStyle: jest.fn(),
+  updateStyleFlags: jest.fn(),
 }));
 jest.mock("../../models/categoryModel", () => ({
   getAllCategories: jest.fn(),
@@ -20,7 +21,7 @@ const styleModel = require("../../models/styleModel");
 const categoryModel = require("../../models/categoryModel");
 const recommendationService = require("../../services/recommendationService");
 const autoTagService = require("../../services/autoTagService");
-const { getStyles, createStyle, updateStyle } = require("../styleController");
+const { getStyles, createStyle, updateStyle, patchStyleFlags } = require("../styleController");
 
 function makeReqRes({ query = {}, admin, user, body = {}, params = {} } = {}) {
   const req = { query, admin, user, body, params };
@@ -269,5 +270,69 @@ describe("styleController.updateStyle - auto-tag gating", () => {
     const callArg = styleModel.updateStyle.mock.calls[0][1];
     expect(callArg.tagIds).toBeUndefined();
     expect(callArg.tagsAutoAssigned).toBeUndefined();
+  });
+});
+
+describe("styleController.patchStyleFlags - quick toggle actions", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    styleModel.updateStyleFlags.mockResolvedValue({ id: "s1", isTrending: true, isEnabled: true });
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    console.error.mockRestore();
+  });
+
+  it("toggles isTrending without requiring the full style payload", async () => {
+    const { req, res } = makeReqRes({ params: { id: "s1" }, body: { isTrending: true } });
+
+    await patchStyleFlags(req, res);
+
+    expect(styleModel.updateStyleFlags).toHaveBeenCalledWith("s1", {
+      isTrending: true,
+      isEnabled: undefined,
+    });
+    expect(res.json).toHaveBeenCalledWith({ id: "s1", isTrending: true, isEnabled: true });
+    expect(recommendationService.invalidateCandidateCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles isEnabled without requiring the full style payload", async () => {
+    const { req, res } = makeReqRes({ params: { id: "s1" }, body: { isEnabled: false } });
+
+    await patchStyleFlags(req, res);
+
+    expect(styleModel.updateStyleFlags).toHaveBeenCalledWith("s1", {
+      isTrending: undefined,
+      isEnabled: false,
+    });
+    expect(res.json).toHaveBeenCalled();
+  });
+
+  it("rejects an empty body with 400", async () => {
+    const { req, res } = makeReqRes({ params: { id: "s1" }, body: {} });
+
+    await patchStyleFlags(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(styleModel.updateStyleFlags).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-boolean flag values with 400", async () => {
+    const { req, res } = makeReqRes({ params: { id: "s1" }, body: { isTrending: "yes" } });
+
+    await patchStyleFlags(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(styleModel.updateStyleFlags).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the style does not exist", async () => {
+    styleModel.updateStyleFlags.mockResolvedValue(undefined);
+    const { req, res } = makeReqRes({ params: { id: "missing" }, body: { isEnabled: true } });
+
+    await patchStyleFlags(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
   });
 });
