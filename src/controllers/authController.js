@@ -7,6 +7,7 @@ const { OAuth2Client } = require('google-auth-library');
 const db = require('../config/db');
 const sendEmail = require('../utils/sendEmail');
 const { renderVerificationPage, renderResetPasswordPage } = require('../utils/htmlTemplates');
+const notificationModel = require('../models/notificationModel');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID;
 if (!GOOGLE_CLIENT_ID) {
@@ -102,6 +103,15 @@ async function register(req, res) {
       INSERT INTO public.profiles (id, full_name, email, provider)
       VALUES ($1, $2, $3, 'email')
     `, [userId, validated.fullName, validated.email.toLowerCase()]);
+
+    // Seed the in-app notification feed - same transaction as the account
+    // rows, so a new user never exists without their welcome notification.
+    await notificationModel.createNotification({
+      userId,
+      type: 'welcome',
+      title: 'Welcome to StyliAI',
+      body: 'Start exploring styles and transform your photos.',
+    }, client);
 
     // Send verification email using Resend
     const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
@@ -630,6 +640,19 @@ async function googleSignIn(req, res) {
            VALUES ($1, $2, $3, 'google', $4)`,
           [userId, fullName, email, avatarUrl]
         );
+
+        // Best-effort welcome notification (this path isn't transactional
+        // like email registration; sign-in must not fail over a feed row).
+        try {
+          await notificationModel.createNotification({
+            userId,
+            type: 'welcome',
+            title: 'Welcome to StyliAI',
+            body: 'Start exploring styles and transform your photos.',
+          });
+        } catch (notifErr) {
+          console.error('[googleSignIn] Failed to create welcome notification:', notifErr.message);
+        }
 
         const newUserRes = await db.query(
           'SELECT id, email, full_name, created_at FROM public.users WHERE id = $1',
