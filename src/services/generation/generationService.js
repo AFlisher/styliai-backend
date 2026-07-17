@@ -84,8 +84,15 @@ function extensionFromMime(mimeType) {
 
 /**
  * Main generation pipeline.
+ *
+ * `fileOrFiles` is one Multer file or an array of them (multi-image styles).
+ * The first image drives the output mime/extension; providers receive the
+ * full set.
  */
-async function generate(file, styleId, finalPrompt) {
+async function generate(fileOrFiles, styleId, finalPrompt) {
+  const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
+  const file = files[0];
+
   // Load style
   const style = await styleModel.getStyleById(styleId);
 
@@ -106,10 +113,13 @@ async function generate(file, styleId, finalPrompt) {
   // Choose provider
   const provider = getProvider();
 
-  // Generate image
+  // Generate image. `imageBuffer`/`mimeType` stay the first image so the
+  // provider signature contract is unchanged; `images` carries the full set
+  // for providers that support multiple source images.
   const generatedBuffer = await provider.generateImage({
     imageBuffer: file.buffer,
     mimeType: file.mimetype,
+    images: files.map((f) => ({ buffer: f.buffer, mimeType: f.mimetype })),
     prompt: resolvedPrompt,
     negativePrompt: promptData.negativePrompt,
   });

@@ -11,6 +11,8 @@ async function getAllStyles() {
       negative_prompt AS "negativePrompt",
       cover_image AS "coverImage",
       credit_cost AS "creditCost",
+      min_images AS "minImages",
+      max_images AS "maxImages",
       is_trending AS "isTrending",
       is_premium AS "isPremium",
       is_enabled AS "isEnabled",
@@ -37,6 +39,8 @@ async function getStyles(filters = {}) {
       s.negative_prompt AS "negativePrompt",
       s.cover_image AS "coverImage",
       s.credit_cost AS "creditCost",
+      s.min_images AS "minImages",
+      s.max_images AS "maxImages",
       s.is_trending AS "isTrending",
       s.is_premium AS "isPremium",
       s.is_enabled AS "isEnabled",
@@ -93,6 +97,8 @@ async function getPublicStyles(filters = {}) {
       name,
       cover_image AS "coverImage",
       credit_cost AS "creditCost",
+      min_images AS "minImages",
+      max_images AS "maxImages",
       is_trending AS "isTrending",
       is_premium AS "isPremium",
       is_enabled AS "isEnabled",
@@ -147,6 +153,8 @@ async function getPublicStylesByIds(ids) {
       name,
       cover_image AS "coverImage",
       credit_cost AS "creditCost",
+      min_images AS "minImages",
+      max_images AS "maxImages",
       is_trending AS "isTrending",
       is_premium AS "isPremium",
       is_enabled AS "isEnabled",
@@ -173,6 +181,8 @@ async function getStyleById(id) {
       s.negative_prompt AS "negativePrompt",
       s.cover_image AS "coverImage",
       s.credit_cost AS "creditCost",
+      s.min_images AS "minImages",
+      s.max_images AS "maxImages",
       s.is_trending AS "isTrending",
       s.is_premium AS "isPremium",
       s.is_enabled AS "isEnabled",
@@ -313,12 +323,14 @@ async function createStyle(style) {
         is_premium,
         is_enabled,
         sort_order,
-        tags_auto_assigned
+        tags_auto_assigned,
+        min_images,
+        max_images
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9,
         COALESCE($10, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM styles WHERE category_id = $1)),
-        $11
+        $11, $12, $13
       )
       RETURNING id
       `,
@@ -333,7 +345,9 @@ async function createStyle(style) {
         style.isPremium,
         style.isEnabled,
         style.sortOrder ?? null,
-        style.tagsAutoAssigned ?? true
+        style.tagsAutoAssigned ?? true,
+        style.minImages ?? 1,
+        style.maxImages ?? 1
       ]
     );
 
@@ -374,8 +388,10 @@ async function updateStyle(id, style) {
         is_enabled = $9,
         sort_order = $10,
         tags_auto_assigned = COALESCE($11, tags_auto_assigned),
+        min_images = $12,
+        max_images = $13,
         updated_at = NOW()
-      WHERE id = $12
+      WHERE id = $14
       RETURNING id
       `,
       [
@@ -390,6 +406,8 @@ async function updateStyle(id, style) {
         style.isEnabled,
         style.sortOrder,
         style.tagsAutoAssigned ?? null,
+        style.minImages ?? 1,
+        style.maxImages ?? 1,
         id
       ]
     );
