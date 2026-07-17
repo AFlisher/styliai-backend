@@ -20,3 +20,8 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user_created
   ON notifications (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread
   ON notifications (user_id) WHERE is_read = false;
+
+-- The backend reads/writes this table over its direct Postgres connection
+-- (table owner, bypasses RLS). Enabling RLS with no policies keeps Supabase's
+-- auto-generated REST API from exposing the table to anon/authenticated keys.
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
