@@ -27,6 +27,27 @@ function validateFieldsInput(fields, prompt) {
   validatePromptFields(prompt || "", fields);
 }
 
+/**
+ * Validates the per-style source image bounds. Absent values default to 1/1,
+ * so single-image styles (and older dashboard builds that don't send these
+ * keys) are untouched. Returns {minImages, maxImages} or throws a
+ * PromptValidationError with the rule that failed.
+ */
+function parseImageCounts({ minImages, maxImages }) {
+  const min = minImages === undefined ? 1 : Number(minImages);
+  const max = maxImages === undefined ? 1 : Number(maxImages);
+  if (!Number.isInteger(min) || min < 1) {
+    throw new PromptValidationError("Minimum images must be a whole number of at least 1.");
+  }
+  if (!Number.isInteger(max) || max < min) {
+    throw new PromptValidationError("Maximum images must be a whole number of at least the minimum.");
+  }
+  if (max > 5) {
+    throw new PromptValidationError("Maximum images cannot exceed 5.");
+  }
+  return { minImages: min, maxImages: max };
+}
+
 async function resolveCategoryName(categoryId) {
   const categories = await categoryModel.getAllCategories();
   return categories.find((c) => c.id === categoryId)?.name ?? "";
@@ -144,6 +165,8 @@ async function createStyle(req, res) {
       parsedCreditCost = numericCreditCost;
     }
 
+    const imageCounts = parseImageCounts(req.body);
+
     // autoAssignTags defaults to true - a new style is auto-tagged unless
     // the admin explicitly built a manual tag selection before first save.
     let finalTagIds = tagIds;
@@ -180,6 +203,8 @@ async function createStyle(req, res) {
       tagIds: finalTagIds,
       tagsAutoAssigned,
       fields,
+      minImages: imageCounts.minImages,
+      maxImages: imageCounts.maxImages,
     });
     recommendationService.invalidateCandidateCache();
 
@@ -255,6 +280,8 @@ async function updateStyle(req, res) {
       parsedCreditCost = numericCreditCost;
     }
 
+    const imageCounts = parseImageCounts(req.body);
+
     // The tag pipeline only ever runs when the caller explicitly says so via
     // autoAssignTags - it's always present from the real Style-modal save
     // flow, never present from the toggle-only quick actions (isTrending/
@@ -301,6 +328,8 @@ async function updateStyle(req, res) {
       tagIds: finalTagIds,
       tagsAutoAssigned,
       fields,
+      minImages: imageCounts.minImages,
+      maxImages: imageCounts.maxImages,
     });
 
     if (!style) {

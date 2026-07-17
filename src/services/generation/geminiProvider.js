@@ -54,10 +54,18 @@ class GeminiProvider {
    *
    * @returns {Promise<Buffer>} The generated image as a Node.js Buffer.
    */
-  async generateImage({ imageBuffer, mimeType, prompt, negativePrompt }) {
+  async generateImage({ imageBuffer, mimeType, images, prompt, negativePrompt }) {
+    // Normalize to a list of source images. `images` (multi-image styles)
+    // wins when provided; otherwise the classic single imageBuffer is used.
+    const sources = images?.length
+      ? images
+      : [{ buffer: imageBuffer, mimeType }];
+
     // --- Input validation -------------------------------------------------
-    if (!Buffer.isBuffer(imageBuffer) || imageBuffer.length === 0) {
-      throw new Error("[GeminiProvider] imageBuffer must be a non-empty Buffer.");
+    for (const src of sources) {
+      if (!Buffer.isBuffer(src.buffer) || src.buffer.length === 0) {
+        throw new Error("[GeminiProvider] every image must be a non-empty Buffer.");
+      }
     }
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       throw new Error("[GeminiProvider] A non-empty prompt string is required.");
@@ -71,23 +79,20 @@ class GeminiProvider {
       fullPrompt += `. Avoid: ${negativePrompt.trim()}`;
     }
 
-    // --- Convert buffer to base64 -----------------------------------------
-    // The SDK expects a plain base64 string (no data-URI prefix).
-    const base64Image = imageBuffer.toString("base64");
-
     // --- Build the contents array -----------------------------------------
-    // Multi-part: first the user image (inline), then the text instruction.
+    // Multi-part: every user image first (inline base64, never a URL), then
+    // the text instruction. Gemini accepts several inlineData parts, which is
+    // what multi-image styles rely on.
     const contents = [
       {
         role: "user",
         parts: [
-          {
-            // Inline image data — never a URL.
+          ...sources.map((src) => ({
             inlineData: {
-              mimeType: mimeType || "image/jpeg",
-              data: base64Image,
+              mimeType: src.mimeType || "image/jpeg",
+              data: src.buffer.toString("base64"),
             },
-          },
+          })),
           {
             text: fullPrompt,
           },

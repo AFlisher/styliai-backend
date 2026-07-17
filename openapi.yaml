@@ -105,6 +105,8 @@ components:
         negativePrompt: { type: string, nullable: true }
         coverImage: { type: string, nullable: true }
         creditCost: { type: integer, minimum: 0 }
+        minImages: { type: integer, minimum: 1, default: 1 }
+        maxImages: { type: integer, minimum: 1, maximum: 5, default: 1 }
         isTrending: { type: boolean }
         isPremium: { type: boolean }
         isEnabled: { type: boolean }
@@ -723,6 +725,8 @@ paths:
                 negativePrompt: { type: string, nullable: true }
                 coverImage: { type: string, nullable: true }
                 creditCost: { type: integer, minimum: 0, default: 1 }
+                minImages: { type: integer, minimum: 1, default: 1 }
+                maxImages: { type: integer, minimum: 1, maximum: 5, default: 1 }
                 isTrending: { type: boolean, default: false }
                 isPremium: { type: boolean, default: false }
                 isEnabled: { type: boolean, default: true }
@@ -812,6 +816,8 @@ paths:
                 negativePrompt: { type: string, nullable: true }
                 coverImage: { type: string, nullable: true }
                 creditCost: { type: integer, minimum: 0 }
+                minImages: { type: integer, minimum: 1, default: 1 }
+                maxImages: { type: integer, minimum: 1, maximum: 5, default: 1 }
                 isTrending: { type: boolean }
                 isPremium: { type: boolean }
                 isEnabled: { type: boolean }

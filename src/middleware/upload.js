@@ -57,4 +57,42 @@ function single(fieldName) {
   };
 }
 
-module.exports = { single, fileFilter, ALLOWED_MIME_TYPES };
+/**
+ * Same wrapper as `single`, but accepts 1..maxCount files under one field
+ * name (multi-image styles). A legacy single-file request is just an array
+ * of one, so existing clients keep working unchanged.
+ */
+function array(fieldName, maxCount) {
+  return function (req, res, next) {
+    multerUpload.array(fieldName, maxCount)(req, res, (err) => {
+      if (!err) {
+        return next();
+      }
+
+      if (err.message === "INVALID_FILE_TYPE") {
+        return res.status(400).json({
+          message: "Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed.",
+        });
+      }
+
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({
+          message: "File is too large. Maximum size is 10MB.",
+        });
+      }
+
+      if (err.code === "LIMIT_UNEXPECTED_FILE") {
+        return res.status(400).json({
+          message: `Too many files. Maximum is ${maxCount} images.`,
+        });
+      }
+
+      console.error("Upload error:", err.message);
+      return res.status(400).json({
+        message: "File upload failed.",
+      });
+    });
+  };
+}
+
+module.exports = { single, array, fileFilter, ALLOWED_MIME_TYPES };

@@ -34,8 +34,10 @@ async function generateImage(req, res, next) {
     const { styleId } = req.body;
     const userId = req.user.id;
 
-    // 1. Validation checks
-    if (!req.file) {
+    // 1. Validation checks. upload.array puts files in req.files; req.file is
+    // kept as a fallback so any single-file route reuse stays valid.
+    const files = req.files?.length ? req.files : (req.file ? [req.file] : []);
+    if (files.length === 0) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, "Source image file is required.", 400);
     }
 
@@ -51,6 +53,22 @@ async function generateImage(req, res, next) {
     }
     if (!style.isEnabled) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, "Style is disabled.", 400);
+    }
+
+    // Enforce the style's configured source-image bounds before any charge.
+    // Columns default to 1/1, so every pre-existing style keeps requiring
+    // exactly one image.
+    const minImages = style.minImages ?? 1;
+    const maxImages = style.maxImages ?? 1;
+    if (files.length < minImages || files.length > maxImages) {
+      const expected = minImages === maxImages
+        ? `exactly ${minImages}`
+        : `between ${minImages} and ${maxImages}`;
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        `This style requires ${expected} source image${maxImages === 1 ? "" : "s"} (received ${files.length}).`,
+        400
+      );
     }
 
     // 1b. Resolve the dynamic prompt template server-side and validate the
@@ -89,7 +107,7 @@ async function generateImage(req, res, next) {
     // 3. Invoke generation orchestration service (uploads image, calls AI)
     let generatedImageUrl;
     try {
-      generatedImageUrl = await generationService.generate(req.file, styleId, finalPrompt);
+      generatedImageUrl = await generationService.generate(files, styleId, finalPrompt);
     } catch (genErr) {
       // Generation failed after the charge already succeeded - refund so the
       // user isn't charged for a failed generation. A refund failure is a

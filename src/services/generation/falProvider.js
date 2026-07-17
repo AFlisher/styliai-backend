@@ -25,10 +25,21 @@ class FalProvider {
   async generateImage({
     imageBuffer,
     mimeType,
+    images,
     prompt,
     negativePrompt,
   }) {
     try {
+      // flux/dev/image-to-image takes exactly one source image. Refusing
+      // (rather than silently dropping extras) surfaces a clear error and
+      // triggers the controller's refund path; multi-image styles need
+      // IMAGE_PROVIDER=gemini.
+      if (images && images.length > 1) {
+        throw new Error(
+          "The configured image provider (fal flux image-to-image) supports a single source image. Use the Gemini provider for multi-image styles."
+        );
+      }
+
       if (!Buffer.isBuffer(imageBuffer)) {
         throw new Error("imageBuffer must be a Buffer.");
       }
