@@ -69,6 +69,23 @@ app.use(cors({
 
 app.use(morgan("dev"));
 app.use(express.json());
+
+// TEMPORARY DIAGNOSTIC - added 2026-07-18 to root-cause a wrong-country
+// report (getCountryFromIp resolving Czechia for a user connecting from
+// Egypt). Remove after the investigation is done - see conversation history.
+const { getCountryFromIp } = require('./utils/geoIp');
+app.get('/api/_debug/ip-check', (req, res) => {
+  const reqIp = req.ip;
+  res.json({
+    reqIp,
+    reqIps: req.ips,
+    xForwardedFor: req.headers['x-forwarded-for'] || null,
+    xRealIp: req.headers['x-real-ip'] || null,
+    socketRemoteAddress: req.socket.remoteAddress,
+    geoFromReqIp: getCountryFromIp(reqIp),
+  });
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
