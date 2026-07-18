@@ -18,9 +18,13 @@ jest.mock("../../services/wallet/walletService", () => ({
   deductBalance: jest.fn(),
   addBalance: jest.fn(),
 }));
+jest.mock("../../models/creationsModel", () => ({
+  addCreation: jest.fn(),
+}));
 
 const stabilityService = require("../../services/stabilityService");
 const walletService = require("../../services/wallet/walletService");
+const creationsModel = require("../../models/creationsModel");
 const { generateImage } = require("../stabilityController");
 
 function makeReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRatio, style } = {}) {
@@ -41,6 +45,7 @@ describe("stabilityController.generateImage", () => {
     stabilityService.generateImage.mockResolvedValue({
       imageUrl: "https://example.com/generated.webp",
     });
+    creationsModel.addCreation.mockResolvedValue({ id: "creation-1" });
     jest.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -72,6 +77,26 @@ describe("stabilityController.generateImage", () => {
       imageUrl: "https://example.com/generated.webp",
     });
     expect(walletService.addBalance).not.toHaveBeenCalled();
+    expect(creationsModel.addCreation).toHaveBeenCalledWith({
+      userId: "user-1",
+      styleId: null,
+      styleName: "Stability AI Text-to-Image",
+      imageUrl: "https://example.com/generated.webp",
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("still returns 200 with the generated URL even if recording creation history fails", async () => {
+    creationsModel.addCreation.mockRejectedValue(new Error("db hiccup"));
+    const { req, res, next } = makeReqRes();
+
+    await generateImage(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      imageUrl: "https://example.com/generated.webp",
+    });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -145,6 +170,7 @@ describe("stabilityController.generateImage", () => {
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "PROVIDER_UNAVAILABLE", statusCode: 503 })
     );
+    expect(creationsModel.addCreation).not.toHaveBeenCalled();
   });
 
   it("refunds and maps insufficient_credits to PROVIDER_UNAVAILABLE/503", async () => {

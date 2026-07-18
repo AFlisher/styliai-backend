@@ -67,13 +67,19 @@ function errorKindForStatus(status) {
   }
 }
 
+// User-generated Stability output lives in its own "creations" bucket,
+// deliberately separate from "style-images" (which holds application/style
+// assets) - keeps cleanup, permissions, and future scaling decisions for
+// user content independent of app assets.
+const CREATIONS_BUCKET = "creations";
+
 async function uploadToSupabase(buffer, outputFormat) {
   const extension = outputFormat === "jpeg" ? "jpg" : outputFormat;
   const filename = `stability-${uuid()}.${extension}`;
   const contentType = `image/${outputFormat}`;
 
   const { error } = await supabase.storage
-    .from("style-images")
+    .from(CREATIONS_BUCKET)
     .upload(filename, buffer, {
       contentType,
       upsert: false,
@@ -86,7 +92,7 @@ async function uploadToSupabase(buffer, outputFormat) {
     );
   }
 
-  const { data } = supabase.storage.from("style-images").getPublicUrl(filename);
+  const { data } = supabase.storage.from(CREATIONS_BUCKET).getPublicUrl(filename);
   return data.publicUrl;
 }
 

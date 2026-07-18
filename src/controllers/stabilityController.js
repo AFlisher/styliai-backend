@@ -1,5 +1,6 @@
 const stabilityService = require("../services/stabilityService");
 const walletService = require("../services/wallet/walletService");
+const creationsModel = require("../models/creationsModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
 
 // Flat per-generation cost, since (unlike /api/generate) there is no style
@@ -7,6 +8,12 @@ const { AppError, ErrorCodes } = require("../utils/errors");
 // change without a deploy; every existing style defaults to 1 credit, so 1
 // is the consistent default here too.
 const GENERATION_COST = Number(process.env.STABILITY_GENERATION_COST) || 1;
+
+// creations.style_id is nullable (ON DELETE SET NULL) precisely for
+// non-style-preset generations like this; style_name is NOT NULL, so a
+// fixed label stands in for the style entity /api/generate would normally
+// supply.
+const CREATION_STYLE_NAME = "Stability AI Text-to-Image";
 
 // Maps a StabilityApiError.kind to an AppError so the global error handler
 // returns the same shape as every other endpoint. Kept local to this
@@ -84,6 +91,21 @@ async function generateImage(req, res, next) {
         throw refundErr;
       }
       throw genErr;
+    }
+
+    // Record this in the user's creation history, same as /api/generate.
+    // Best-effort: the user already paid credits and has a real generated
+    // image back, so a history-write hiccup must never fail an otherwise-
+    // successful response.
+    try {
+      await creationsModel.addCreation({
+        userId,
+        styleId: null,
+        styleName: CREATION_STYLE_NAME,
+        imageUrl: result.imageUrl,
+      });
+    } catch (creationErr) {
+      console.error("[stabilityController] Failed to record creation history:", creationErr.message);
     }
 
     return res.status(200).json({
