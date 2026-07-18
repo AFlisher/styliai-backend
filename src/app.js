@@ -18,6 +18,14 @@ const notificationRoutes = require("./routes/notificationRoutes");
 
 const app = express();
 
+// Railway (and most PaaS) put the app behind a single reverse proxy/load
+// balancer, so without this req.ip resolves to that proxy's internal address
+// rather than the real client IP - this is why geoip country lookups and
+// per-IP rate limiting were seeing the same non-public address for every
+// request. `1` trusts exactly one hop (the immediate proxy), reading the
+// client IP from X-Forwarded-For.
+app.set('trust proxy', 1);
+
 // Configure helmet with custom CSP for our forms
 app.use(helmet({
   contentSecurityPolicy: {
