@@ -266,6 +266,13 @@ components:
         generatedImageUrl: { type: string, format: uri }
       required: [success, generatedImageUrl]
 
+    AiGenerateResult:
+      type: object
+      properties:
+        success: { type: boolean }
+        imageUrl: { type: string, format: uri }
+      required: [success, imageUrl]
+
     AdminUserSearchResult:
       type: object
       properties:
@@ -1021,6 +1028,31 @@ paths:
         '403': { description: Insufficient balance, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
         '404': { description: Style not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
         '503': { description: AI provider temporarily unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+
+  /api/ai/generate:
+    post:
+      summary: >
+        Generate an image from a text prompt via Stability AI. Fully independent
+        of /api/generate (style-transfer) and the internal auto-tagging service -
+        separate service/controller/route, no shared state.
+      security: [{ userBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt: { type: string }
+                negativePrompt: { type: string }
+                aspectRatio: { type: string, example: "16:9" }
+                style: { type: string, example: "photographic" }
+              required: [prompt]
+      responses:
+        '200': { description: Generated, content: { application/json: { schema: { $ref: '#/components/schemas/AiGenerateResult' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+        '429': { description: Rate limited by Stability AI, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+        '503': { description: Stability AI unavailable, misconfigured, or out of credits, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
 
   /api/wallet:
     get:
