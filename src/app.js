@@ -18,13 +18,17 @@ const notificationRoutes = require("./routes/notificationRoutes");
 
 const app = express();
 
-// Railway (and most PaaS) put the app behind a single reverse proxy/load
-// balancer, so without this req.ip resolves to that proxy's internal address
-// rather than the real client IP - this is why geoip country lookups and
-// per-IP rate limiting were seeing the same non-public address for every
-// request. `1` trusts exactly one hop (the immediate proxy), reading the
-// client IP from X-Forwarded-For.
-app.set('trust proxy', 1);
+// Railway puts the app behind two hops (a public edge, then an internal
+// load balancer connecting over its own 100.64.0.0/10 CGNAT range) - without
+// this, req.ip resolves to one of those internal addresses rather than the
+// real client IP. `trust proxy: 1` was tried first but only strips one hop,
+// so it resolved to Railway's own edge IP - confirmed via a temporary
+// diagnostic endpoint, e.g. X-Forwarded-For: "<real client ip>, <railway edge ip>"
+// with req.ip landing on the second (wrong) entry. Since the app is only
+// ever reached through Railway's own network (never directly exposed),
+// `true` (trust the whole forwarded chain) is safe and doesn't hardcode a
+// hop count that could change as Railway's infra evolves.
+app.set('trust proxy', true);
 
 // Configure helmet with custom CSP for our forms
 app.use(helmet({
@@ -69,22 +73,6 @@ app.use(cors({
 
 app.use(morgan("dev"));
 app.use(express.json());
-
-// TEMPORARY DIAGNOSTIC - added 2026-07-18 to root-cause a wrong-country
-// report (getCountryFromIp resolving Czechia for a user connecting from
-// Egypt). Remove after the investigation is done - see conversation history.
-const { getCountryFromIp } = require('./utils/geoIp');
-app.get('/api/_debug/ip-check', (req, res) => {
-  const reqIp = req.ip;
-  res.json({
-    reqIp,
-    reqIps: req.ips,
-    xForwardedFor: req.headers['x-forwarded-for'] || null,
-    xRealIp: req.headers['x-real-ip'] || null,
-    socketRemoteAddress: req.socket.remoteAddress,
-    geoFromReqIp: getCountryFromIp(reqIp),
-  });
-});
 
 // Routes
 app.use('/api/auth', authRoutes);

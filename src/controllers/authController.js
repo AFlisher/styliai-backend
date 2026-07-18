@@ -93,14 +93,6 @@ async function register(req, res) {
     const geo = getCountryFromIp(req.ip);
     const countryCode = geo ? geo.countryCode : null;
     const countryName = geo ? geo.countryName : null;
-    // TEMPORARY DIAGNOSTIC - remove after wrong-country investigation (see /api/_debug/ip-check in app.js)
-    console.log('[geoip-debug][register]', JSON.stringify({
-      reqIp: req.ip, reqIps: req.ips,
-      xForwardedFor: req.headers?.['x-forwarded-for'] || null,
-      xRealIp: req.headers?.['x-real-ip'] || null,
-      socketRemoteAddress: req.socket?.remoteAddress || null,
-      geo,
-    }));
 
     // Get a client from the pool for the transaction
     client = await db.pool.connect();
@@ -649,14 +641,6 @@ async function googleSignIn(req, res) {
         const geo = getCountryFromIp(req.ip);
         const countryCode = geo ? geo.countryCode : null;
         const countryName = geo ? geo.countryName : null;
-        // TEMPORARY DIAGNOSTIC - remove after wrong-country investigation (see /api/_debug/ip-check in app.js)
-        console.log('[geoip-debug][googleSignIn]', JSON.stringify({
-          reqIp: req.ip, reqIps: req.ips,
-          xForwardedFor: req.headers?.['x-forwarded-for'] || null,
-          xRealIp: req.headers?.['x-real-ip'] || null,
-          socketRemoteAddress: req.socket?.remoteAddress || null,
-          geo,
-        }));
 
         await db.query(
           `INSERT INTO public.users
