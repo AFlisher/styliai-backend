@@ -1032,8 +1032,10 @@ paths:
   /api/ai/generate:
     post:
       summary: >
-        Generate an image from a text prompt via Stability AI. Fully independent
-        of /api/generate (style-transfer) and the internal auto-tagging service -
+        Generate an image (WebP) from a text prompt via Stability AI. Charges
+        credits atomically before calling the AI provider, refunds on failure
+        - same flow as /api/generate. Fully independent of /api/generate
+        (style-transfer) and the internal auto-tagging service otherwise -
         separate service/controller/route, no shared state.
       security: [{ userBearerAuth: [] }]
       requestBody:
@@ -1051,6 +1053,7 @@ paths:
       responses:
         '200': { description: Generated, content: { application/json: { schema: { $ref: '#/components/schemas/AiGenerateResult' } } } }
         '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+        '403': { description: Insufficient balance, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
         '429': { description: Rate limited by Stability AI, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
         '503': { description: Stability AI unavailable, misconfigured, or out of credits, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
 

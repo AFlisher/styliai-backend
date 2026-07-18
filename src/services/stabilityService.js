@@ -112,7 +112,7 @@ async function generateImage({ prompt, negativePrompt, aspectRatio, style }) {
   if (negativePrompt) form.append("negative_prompt", negativePrompt);
   if (aspectRatio) form.append("aspect_ratio", aspectRatio);
   if (style) form.append("style_preset", style);
-  form.append("output_format", "png");
+  form.append("output_format", "webp");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -167,7 +167,7 @@ async function generateImage({ prompt, negativePrompt, aspectRatio, style }) {
     throw new StabilityApiError("provider_error", "Stability AI returned an empty image.");
   }
 
-  const imageUrl = await uploadToSupabase(buffer, "png");
+  const imageUrl = await uploadToSupabase(buffer, "webp");
 
   return {
     imageUrl,

@@ -1,6 +1,6 @@
-// Explicit factory mock (rather than jest.mock(path) automocking) so the
-// real module - which eagerly imports the Supabase client at import time -
-// is never actually loaded during tests.
+// Explicit factory mocks (rather than jest.mock(path) automocking) so the
+// real modules - which eagerly construct a Supabase/DB client at import time
+// - are never actually loaded during tests.
 jest.mock("../../services/stabilityService", () => {
   class StabilityApiError extends Error {
     constructor(kind, message, details) {
@@ -14,8 +14,13 @@ jest.mock("../../services/stabilityService", () => {
     StabilityApiError,
   };
 });
+jest.mock("../../services/wallet/walletService", () => ({
+  deductBalance: jest.fn(),
+  addBalance: jest.fn(),
+}));
 
 const stabilityService = require("../../services/stabilityService");
+const walletService = require("../../services/wallet/walletService");
 const { generateImage } = require("../stabilityController");
 
 function makeReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRatio, style } = {}) {
@@ -31,8 +36,10 @@ function makeReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRatio, s
 describe("stabilityController.generateImage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    walletService.deductBalance.mockResolvedValue(9);
+    walletService.addBalance.mockResolvedValue(10);
     stabilityService.generateImage.mockResolvedValue({
-      imageUrl: "https://example.com/generated.png",
+      imageUrl: "https://example.com/generated.webp",
     });
     jest.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -41,11 +48,18 @@ describe("stabilityController.generateImage", () => {
     console.error.mockRestore();
   });
 
-  it("returns 200 with the generated image URL on success", async () => {
+  it("returns 200 with the generated image URL on success, charging exactly once", async () => {
     const { req, res, next } = makeReqRes();
 
     await generateImage(req, res, next);
 
+    expect(walletService.deductBalance).toHaveBeenCalledTimes(1);
+    expect(walletService.deductBalance).toHaveBeenCalledWith(
+      "user-1",
+      1,
+      "generation",
+      "AI image generated (Stability)"
+    );
     expect(stabilityService.generateImage).toHaveBeenCalledWith({
       prompt: "a cat astronaut",
       negativePrompt: undefined,
@@ -55,8 +69,9 @@ describe("stabilityController.generateImage", () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
-      imageUrl: "https://example.com/generated.png",
+      imageUrl: "https://example.com/generated.webp",
     });
+    expect(walletService.addBalance).not.toHaveBeenCalled();
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -77,7 +92,7 @@ describe("stabilityController.generateImage", () => {
     });
   });
 
-  it("rejects with VALIDATION_ERROR when prompt is missing, without calling the service", async () => {
+  it("rejects with VALIDATION_ERROR when prompt is missing, before any charge", async () => {
     const { req, res, next } = makeReqRes({ prompt: null });
 
     await generateImage(req, res, next);
@@ -85,6 +100,7 @@ describe("stabilityController.generateImage", () => {
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "VALIDATION_ERROR", statusCode: 400 })
     );
+    expect(walletService.deductBalance).not.toHaveBeenCalled();
     expect(stabilityService.generateImage).not.toHaveBeenCalled();
   });
 
@@ -96,10 +112,23 @@ describe("stabilityController.generateImage", () => {
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "VALIDATION_ERROR", statusCode: 400 })
     );
+    expect(walletService.deductBalance).not.toHaveBeenCalled();
     expect(stabilityService.generateImage).not.toHaveBeenCalled();
   });
 
-  it("maps invalid_api_key to PROVIDER_UNAVAILABLE/503", async () => {
+  it("maps insufficient wallet balance to INSUFFICIENT_BALANCE/403, without calling Stability", async () => {
+    walletService.deductBalance.mockRejectedValue(new Error("Insufficient balance"));
+    const { req, res, next } = makeReqRes();
+
+    await generateImage(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "INSUFFICIENT_BALANCE", statusCode: 403 })
+    );
+    expect(stabilityService.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("refunds and maps invalid_api_key to PROVIDER_UNAVAILABLE/503", async () => {
     stabilityService.generateImage.mockRejectedValue(
       new stabilityService.StabilityApiError("invalid_api_key", "bad key")
     );
@@ -107,12 +136,18 @@ describe("stabilityController.generateImage", () => {
 
     await generateImage(req, res, next);
 
+    expect(walletService.addBalance).toHaveBeenCalledWith(
+      "user-1",
+      1,
+      "refund",
+      "Refund for failed Stability generation"
+    );
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "PROVIDER_UNAVAILABLE", statusCode: 503 })
     );
   });
 
-  it("maps insufficient_credits to PROVIDER_UNAVAILABLE/503", async () => {
+  it("refunds and maps insufficient_credits to PROVIDER_UNAVAILABLE/503", async () => {
     stabilityService.generateImage.mockRejectedValue(
       new stabilityService.StabilityApiError("insufficient_credits", "no credits")
     );
@@ -120,12 +155,13 @@ describe("stabilityController.generateImage", () => {
 
     await generateImage(req, res, next);
 
+    expect(walletService.addBalance).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "PROVIDER_UNAVAILABLE", statusCode: 503 })
     );
   });
 
-  it("maps rate_limited to RATE_LIMITED/429", async () => {
+  it("refunds and maps rate_limited to RATE_LIMITED/429", async () => {
     stabilityService.generateImage.mockRejectedValue(
       new stabilityService.StabilityApiError("rate_limited", "too many requests")
     );
@@ -133,12 +169,13 @@ describe("stabilityController.generateImage", () => {
 
     await generateImage(req, res, next);
 
+    expect(walletService.addBalance).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "RATE_LIMITED", statusCode: 429 })
     );
   });
 
-  it("maps timeout to PROVIDER_UNAVAILABLE/503", async () => {
+  it("refunds and maps timeout to PROVIDER_UNAVAILABLE/503", async () => {
     stabilityService.generateImage.mockRejectedValue(
       new stabilityService.StabilityApiError("timeout", "timed out")
     );
@@ -146,12 +183,13 @@ describe("stabilityController.generateImage", () => {
 
     await generateImage(req, res, next);
 
+    expect(walletService.addBalance).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "PROVIDER_UNAVAILABLE", statusCode: 503 })
     );
   });
 
-  it("maps an unrecognized provider error kind to PROVIDER_UNAVAILABLE/503", async () => {
+  it("refunds and maps an unrecognized provider error kind to PROVIDER_UNAVAILABLE/503", async () => {
     stabilityService.generateImage.mockRejectedValue(
       new stabilityService.StabilityApiError("provider_error", "upstream 500")
     );
@@ -159,23 +197,46 @@ describe("stabilityController.generateImage", () => {
 
     await generateImage(req, res, next);
 
+    expect(walletService.addBalance).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "PROVIDER_UNAVAILABLE", statusCode: 503 })
     );
   });
 
-  it("maps an unexpected non-Stability error to INTERNAL_ERROR/500", async () => {
+  it("refunds and maps an unexpected non-Stability error to INTERNAL_ERROR/500", async () => {
     stabilityService.generateImage.mockRejectedValue(new Error("unexpected crash"));
     const { req, res, next } = makeReqRes();
 
     await generateImage(req, res, next);
 
+    expect(walletService.addBalance).toHaveBeenCalledTimes(1);
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({
         code: "INTERNAL_ERROR",
         statusCode: 500,
         message: "unexpected crash",
       })
+    );
+  });
+
+  it("logs a [FINANCIAL INCONSISTENCY] error and still responds if the refund itself fails", async () => {
+    stabilityService.generateImage.mockRejectedValue(new Error("provider crash"));
+    walletService.addBalance.mockRejectedValue(new Error("refund db error"));
+    const { req, res, next } = makeReqRes();
+
+    await generateImage(req, res, next);
+
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("[FINANCIAL INCONSISTENCY]"),
+      expect.objectContaining({
+        userId: "user-1",
+        amount: 1,
+        originalError: "provider crash",
+        refundError: "refund db error",
+      })
+    );
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "INTERNAL_ERROR", statusCode: 500, message: "refund db error" })
     );
   });
 });

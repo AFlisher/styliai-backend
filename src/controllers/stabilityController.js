@@ -1,5 +1,12 @@
 const stabilityService = require("../services/stabilityService");
+const walletService = require("../services/wallet/walletService");
 const { AppError, ErrorCodes } = require("../utils/errors");
+
+// Flat per-generation cost, since (unlike /api/generate) there is no style
+// entity here to carry a per-item credit_cost. Configurable so pricing can
+// change without a deploy; every existing style defaults to 1 credit, so 1
+// is the consistent default here too.
+const GENERATION_COST = Number(process.env.STABILITY_GENERATION_COST) || 1;
 
 // Maps a StabilityApiError.kind to an AppError so the global error handler
 // returns the same shape as every other endpoint. Kept local to this
@@ -30,17 +37,54 @@ const KIND_TO_APP_ERROR = {
 async function generateImage(req, res, next) {
   try {
     const { prompt, negativePrompt, aspectRatio, style } = req.body;
+    const userId = req.user.id;
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, "prompt is required.", 400);
     }
 
-    const result = await stabilityService.generateImage({
-      prompt,
-      negativePrompt,
-      aspectRatio,
-      style,
-    });
+    // Deduct BEFORE calling the paid provider - same atomic, row-locked
+    // check-and-deduct flow /api/generate uses (walletService.deductBalance),
+    // so no user can call this endpoint for free or race past their balance.
+    await walletService.deductBalance(
+      userId,
+      GENERATION_COST,
+      "generation",
+      "AI image generated (Stability)"
+    );
+
+    let result;
+    try {
+      result = await stabilityService.generateImage({
+        prompt,
+        negativePrompt,
+        aspectRatio,
+        style,
+      });
+    } catch (genErr) {
+      // Generation failed after the charge already succeeded - refund so the
+      // user isn't charged for a failed generation, mirroring generateController.
+      try {
+        await walletService.addBalance(
+          userId,
+          GENERATION_COST,
+          "refund",
+          "Refund for failed Stability generation"
+        );
+      } catch (refundErr) {
+        console.error(
+          "[FINANCIAL INCONSISTENCY] Refund failed after a failed Stability generation - user was charged but never received a refund.",
+          {
+            userId,
+            amount: GENERATION_COST,
+            originalError: genErr && genErr.message,
+            refundError: refundErr && refundErr.message,
+          }
+        );
+        throw refundErr;
+      }
+      throw genErr;
+    }
 
     return res.status(200).json({
       success: true,
@@ -49,6 +93,10 @@ async function generateImage(req, res, next) {
   } catch (err) {
     if (err instanceof AppError) {
       return next(err);
+    }
+
+    if (err.message === "Insufficient balance") {
+      return next(new AppError(ErrorCodes.INSUFFICIENT_BALANCE, "Insufficient balance", 403));
     }
 
     if (err instanceof stabilityService.StabilityApiError) {
