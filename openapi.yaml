@@ -233,6 +233,26 @@ components:
             required: [id, userEmail, type, amount, date]
       required: [totalUsers, activeToday, imagesGenerated, creditsUsed, storageUsedMB, chartData, recentActivity]
 
+    CountryStat:
+      type: object
+      properties:
+        countryCode: { type: string, description: "ISO 3166-1 alpha-2 code, e.g. US" }
+        countryName: { type: string }
+        userCount: { type: integer }
+        percentage:
+          type: number
+          description: Percentage of users (within the selected range) that have this country, rounded to 2 decimals.
+      required: [countryCode, countryName, userCount, percentage]
+
+    UsersByCountryStats:
+      type: object
+      properties:
+        range: { type: string, enum: [today, last7days, last30days, allTime] }
+        countries:
+          type: array
+          items: { $ref: '#/components/schemas/CountryStat' }
+      required: [range, countries]
+
     UploadResult:
       type: object
       properties:
@@ -502,6 +522,21 @@ paths:
       security: [{ adminBearerAuth: [] }]
       responses:
         '200': { description: Stats, content: { application/json: { schema: { $ref: '#/components/schemas/AdminStats' } } } }
+        '401': { description: Missing/invalid admin token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/admin/stats/countries:
+    get:
+      summary: Users-by-country breakdown, aggregated from public.users.country_code/country_name (Users by Country analytics).
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: range
+          in: query
+          required: false
+          description: Defaults to allTime. Filters on users.created_at.
+          schema: { type: string, enum: [today, last7days, last30days, allTime], default: allTime }
+      responses:
+        '200': { description: Country breakdown, content: { application/json: { schema: { $ref: '#/components/schemas/UsersByCountryStats' } } } }
+        '400': { description: Invalid range param, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '401': { description: Missing/invalid admin token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
   /api/admin/users/search:
