@@ -10,6 +10,7 @@ const { renderVerificationPage, renderResetPasswordPage } = require('../utils/ht
 const { passwordSchema, PASSWORD_POLICY_MESSAGE } = require('../utils/passwordPolicy');
 const escapeHtml = require('../utils/escapeHtml');
 const notificationModel = require('../models/notificationModel');
+const { getCountryFromIp } = require('../utils/geoIp');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID;
 if (!GOOGLE_CLIENT_ID) {
@@ -88,9 +89,14 @@ async function register(req, res) {
     const verificationToken = uuidv4();
     const passwordHash = await bcrypt.hash(validated.password, 10);
 
+    // Resolve country from the request IP for analytics only; the IP itself is not stored.
+    const geo = getCountryFromIp(req.ip);
+    const countryCode = geo ? geo.countryCode : null;
+    const countryName = geo ? geo.countryName : null;
+
     // Get a client from the pool for the transaction
     client = await db.pool.connect();
-    
+
     // BEGIN transaction
     await client.query('BEGIN');
 
@@ -98,9 +104,9 @@ async function register(req, res) {
     // the verification token is stored, so a DB/backup leak can't be used to
     // verify arbitrary accounts - same handling as reset_token_hash.
     await client.query(`
-      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token_hash, provider)
-      VALUES ($1, $2, $3, $4, false, $5, 'email')
-    `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, hashToken(verificationToken)]);
+      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token_hash, provider, country_code, country_name)
+      VALUES ($1, $2, $3, $4, false, $5, 'email', $6, $7)
+    `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, hashToken(verificationToken), countryCode, countryName]);
 
     // Save corresponding profile inside public.profiles
     await client.query(`
@@ -630,11 +636,17 @@ async function googleSignIn(req, res) {
       } else {
         // 3) New user — create account
         const userId = uuidv4();
+
+        // Resolve country from the request IP for analytics only; the IP itself is not stored.
+        const geo = getCountryFromIp(req.ip);
+        const countryCode = geo ? geo.countryCode : null;
+        const countryName = geo ? geo.countryName : null;
+
         await db.query(
           `INSERT INTO public.users
-             (id, full_name, email, password_hash, email_verified, google_id, provider, avatar_url)
-           VALUES ($1, $2, $3, NULL, true, $4, 'google', $5)`,
-          [userId, fullName, email, googleId, avatarUrl]
+             (id, full_name, email, password_hash, email_verified, google_id, provider, avatar_url, country_code, country_name)
+           VALUES ($1, $2, $3, NULL, true, $4, 'google', $5, $6, $7)`,
+          [userId, fullName, email, googleId, avatarUrl, countryCode, countryName]
         );
 
         // Create matching profile row

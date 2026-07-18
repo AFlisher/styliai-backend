@@ -97,6 +97,58 @@ async function getStats(req, res) {
   }
 }
 
+const COUNTRY_STATS_RANGES = new Set(["today", "last7days", "last30days", "allTime"]);
+
+// Mirrors the trailing-window convention already used by getStats' 7-day
+// chartData (CURRENT_DATE - 6 days = today + 6 preceding days).
+function countryDateFilterFor(range) {
+  switch (range) {
+    case "today":
+      return "AND created_at >= CURRENT_DATE";
+    case "last7days":
+      return "AND created_at >= CURRENT_DATE - INTERVAL '6 days'";
+    case "last30days":
+      return "AND created_at >= CURRENT_DATE - INTERVAL '29 days'";
+    case "allTime":
+    default:
+      return "";
+  }
+}
+
+async function getUsersByCountry(req, res) {
+  const range = typeof req.query.range === "string" ? req.query.range : "allTime";
+  if (!COUNTRY_STATS_RANGES.has(range)) {
+    return res.status(400).json({
+      message: "Invalid range. Must be one of: today, last7days, last30days, allTime."
+    });
+  }
+
+  try {
+    const dateFilter = countryDateFilterFor(range);
+    const result = await db.query(`
+      SELECT
+        country_code AS "countryCode",
+        country_name AS "countryName",
+        COUNT(*)::int AS "userCount",
+        ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2)::float AS percentage
+      FROM public.users
+      WHERE country_code IS NOT NULL
+        ${dateFilter}
+      GROUP BY country_code, country_name
+      ORDER BY "userCount" DESC
+    `);
+
+    res.json({ range, countries: result.rows });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      message: "Failed to load country analytics."
+    });
+  }
+}
+
 module.exports = {
-  getStats
+  getStats,
+  getUsersByCountry
 };
