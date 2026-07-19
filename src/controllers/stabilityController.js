@@ -35,6 +35,23 @@ const KIND_TO_APP_ERROR = {
   provider_error: (message) => new AppError(ErrorCodes.PROVIDER_UNAVAILABLE, message, 503),
 };
 
+// Shared by generateImage and adminPreviewGenerate so the StabilityApiError
+// -> AppError mapping lives in exactly one place.
+function handleStabilityError(err, next) {
+  if (err instanceof AppError) {
+    return next(err);
+  }
+
+  if (err instanceof stabilityService.StabilityApiError) {
+    console.error("Stability AI Controller Error:", err.kind, err.message, err.details || "");
+    const buildAppError = KIND_TO_APP_ERROR[err.kind] || KIND_TO_APP_ERROR.provider_error;
+    return next(buildAppError(err.message));
+  }
+
+  console.error("Stability AI Controller Error:", err);
+  return next(new AppError(ErrorCodes.INTERNAL_ERROR, err.message || "Image generation failed.", 500));
+}
+
 /**
  * POST /api/ai/generate
  * Body: { prompt, negativePrompt?, aspectRatio?, style? }
@@ -121,17 +138,43 @@ async function generateImage(req, res, next) {
       return next(new AppError(ErrorCodes.INSUFFICIENT_BALANCE, "Insufficient balance", 403));
     }
 
-    if (err instanceof stabilityService.StabilityApiError) {
-      console.error("Stability AI Controller Error:", err.kind, err.message, err.details || "");
-      const buildAppError = KIND_TO_APP_ERROR[err.kind] || KIND_TO_APP_ERROR.provider_error;
-      return next(buildAppError(err.message));
+    return handleStabilityError(err, next);
+  }
+}
+
+/**
+ * POST /api/admin/ai/generate-preview
+ * Admin Dashboard "Test Prompt" tool. Reuses the exact same
+ * stabilityService.generateImage() call as the real /api/ai/generate
+ * endpoint above, but intentionally skips wallet deduction/refund and
+ * creation-history writes - this is an admin testing aid, not a real user
+ * generation, and admins have no wallet row to charge against.
+ */
+async function adminPreviewGenerate(req, res, next) {
+  try {
+    const { prompt, negativePrompt, aspectRatio, style } = req.body;
+
+    if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "prompt is required.", 400);
     }
 
-    console.error("Stability AI Controller Error:", err);
-    return next(new AppError(ErrorCodes.INTERNAL_ERROR, err.message || "Image generation failed.", 500));
+    const result = await stabilityService.generateImage({
+      prompt,
+      negativePrompt,
+      aspectRatio,
+      style,
+    });
+
+    return res.status(200).json({
+      success: true,
+      imageUrl: result.imageUrl,
+    });
+  } catch (err) {
+    return handleStabilityError(err, next);
   }
 }
 
 module.exports = {
   generateImage,
+  adminPreviewGenerate,
 };

@@ -25,12 +25,22 @@ jest.mock("../../models/creationsModel", () => ({
 const stabilityService = require("../../services/stabilityService");
 const walletService = require("../../services/wallet/walletService");
 const creationsModel = require("../../models/creationsModel");
-const { generateImage } = require("../stabilityController");
+const { generateImage, adminPreviewGenerate } = require("../stabilityController");
 
 function makeReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRatio, style } = {}) {
   const req = {
     body: { prompt, negativePrompt, aspectRatio, style },
     user: { id: "user-1" },
+  };
+  const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  const next = jest.fn();
+  return { req, res, next };
+}
+
+function makeAdminReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRatio, style } = {}) {
+  const req = {
+    body: { prompt, negativePrompt, aspectRatio, style },
+    admin: { id: "admin-1" },
   };
   const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
   const next = jest.fn();
@@ -263,6 +273,82 @@ describe("stabilityController.generateImage", () => {
     );
     expect(next).toHaveBeenCalledWith(
       expect.objectContaining({ code: "INTERNAL_ERROR", statusCode: 500, message: "refund db error" })
+    );
+  });
+});
+
+describe("stabilityController.adminPreviewGenerate", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    stabilityService.generateImage.mockResolvedValue({
+      imageUrl: "https://example.com/generated.webp",
+    });
+    jest.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    console.error.mockRestore();
+  });
+
+  it("returns 200 with the generated image URL, without touching the wallet or creation history", async () => {
+    const { req, res, next } = makeAdminReqRes();
+
+    await adminPreviewGenerate(req, res, next);
+
+    expect(stabilityService.generateImage).toHaveBeenCalledWith({
+      prompt: "a cat astronaut",
+      negativePrompt: undefined,
+      aspectRatio: undefined,
+      style: undefined,
+    });
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      imageUrl: "https://example.com/generated.webp",
+    });
+    expect(walletService.deductBalance).not.toHaveBeenCalled();
+    expect(walletService.addBalance).not.toHaveBeenCalled();
+    expect(creationsModel.addCreation).not.toHaveBeenCalled();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("rejects with VALIDATION_ERROR when prompt is missing, without calling Stability", async () => {
+    const { req, res, next } = makeAdminReqRes({ prompt: null });
+
+    await adminPreviewGenerate(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "VALIDATION_ERROR", statusCode: 400 })
+    );
+    expect(stabilityService.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("maps a StabilityApiError to the same AppError the real endpoint uses, with no refund attempted", async () => {
+    stabilityService.generateImage.mockRejectedValue(
+      new stabilityService.StabilityApiError("rate_limited", "too many requests")
+    );
+    const { req, res, next } = makeAdminReqRes();
+
+    await adminPreviewGenerate(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "RATE_LIMITED", statusCode: 429 })
+    );
+    expect(walletService.addBalance).not.toHaveBeenCalled();
+  });
+
+  it("maps an unexpected non-Stability error to INTERNAL_ERROR/500", async () => {
+    stabilityService.generateImage.mockRejectedValue(new Error("unexpected crash"));
+    const { req, res, next } = makeAdminReqRes();
+
+    await adminPreviewGenerate(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "INTERNAL_ERROR",
+        statusCode: 500,
+        message: "unexpected crash",
+      })
     );
   });
 });

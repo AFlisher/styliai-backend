@@ -596,6 +596,31 @@ paths:
         '400': { description: Validation error or insufficient balance for a deduction, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '404': { description: User not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
+  /api/admin/ai/generate-preview:
+    post:
+      summary: >
+        Admin Dashboard "Test Prompt" tool. Reuses the same Stability AI
+        generation as /api/ai/generate, but charges no wallet and writes no
+        creation-history row - it's a testing aid, not a real user generation.
+      security: [{ adminBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt: { type: string }
+                negativePrompt: { type: string }
+                aspectRatio: { type: string, example: "16:9" }
+                style: { type: string, example: "photographic" }
+              required: [prompt]
+      responses:
+        '200': { description: Generated, content: { application/json: { schema: { $ref: '#/components/schemas/AiGenerateResult' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '429': { description: Rate limited by Stability AI, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '503': { description: Stability AI unavailable, misconfigured, or out of credits, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
   /api/categories:
     get:
       summary: List all categories.
