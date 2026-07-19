@@ -1,6 +1,7 @@
 const stabilityService = require("../services/stabilityService");
 const walletService = require("../services/wallet/walletService");
 const creationsModel = require("../models/creationsModel");
+const styleModel = require("../models/styleModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
 
 // Flat per-generation cost, since (unlike /api/generate) there is no style
@@ -54,14 +55,31 @@ function handleStabilityError(err, next) {
 
 /**
  * POST /api/ai/generate
- * Body: { prompt, negativePrompt?, aspectRatio?, style? }
+ * Body: { prompt?, styleId?, negativePrompt?, aspectRatio?, style? }
+ * At least one of prompt/styleId is required. GET /api/styles never exposes
+ * a style's prompt/negativePrompt to the client (proprietary text, same
+ * protection /api/generate already relies on) - so when the client sends a
+ * styleId instead of raw prompt text, it's resolved here server-side,
+ * mirroring exactly how /api/generate resolves its own prompt.
  * Isolated from the /api/generate (style-transfer) and tagging pipelines -
  * this only talks to stabilityService.
  */
 async function generateImage(req, res, next) {
   try {
-    const { prompt, negativePrompt, aspectRatio, style } = req.body;
+    let { prompt, negativePrompt, aspectRatio, style } = req.body;
+    const { styleId } = req.body;
     const userId = req.user.id;
+
+    let resolvedStyle = null;
+    if ((!prompt || !prompt.trim()) && styleId) {
+      resolvedStyle = await styleModel.getStyleById(styleId);
+      if (resolvedStyle) {
+        prompt = resolvedStyle.prompt;
+        if (!negativePrompt) {
+          negativePrompt = resolvedStyle.negativePrompt;
+        }
+      }
+    }
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, "prompt is required.", 400);
@@ -117,8 +135,8 @@ async function generateImage(req, res, next) {
     try {
       await creationsModel.addCreation({
         userId,
-        styleId: null,
-        styleName: CREATION_STYLE_NAME,
+        styleId: resolvedStyle ? resolvedStyle.id : null,
+        styleName: resolvedStyle ? resolvedStyle.name : CREATION_STYLE_NAME,
         imageUrl: result.imageUrl,
       });
     } catch (creationErr) {

@@ -21,15 +21,19 @@ jest.mock("../../services/wallet/walletService", () => ({
 jest.mock("../../models/creationsModel", () => ({
   addCreation: jest.fn(),
 }));
+jest.mock("../../models/styleModel", () => ({
+  getStyleById: jest.fn(),
+}));
 
 const stabilityService = require("../../services/stabilityService");
 const walletService = require("../../services/wallet/walletService");
 const creationsModel = require("../../models/creationsModel");
+const styleModel = require("../../models/styleModel");
 const { generateImage, adminPreviewGenerate } = require("../stabilityController");
 
-function makeReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRatio, style } = {}) {
+function makeReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRatio, style, styleId } = {}) {
   const req = {
-    body: { prompt, negativePrompt, aspectRatio, style },
+    body: { prompt, negativePrompt, aspectRatio, style, styleId },
     user: { id: "user-1" },
   };
   const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
@@ -136,6 +140,89 @@ describe("stabilityController.generateImage", () => {
       expect.objectContaining({ code: "VALIDATION_ERROR", statusCode: 400 })
     );
     expect(walletService.deductBalance).not.toHaveBeenCalled();
+    expect(stabilityService.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("resolves the prompt server-side from styleId when prompt is blank (the Flutter client case)", async () => {
+    styleModel.getStyleById.mockResolvedValue({
+      id: "style-1",
+      name: "Café Muse",
+      prompt: "a cozy cafe portrait",
+      negativePrompt: "blurry, low quality",
+    });
+    const { req, res, next } = makeReqRes({ prompt: null, styleId: "style-1" });
+
+    await generateImage(req, res, next);
+
+    expect(styleModel.getStyleById).toHaveBeenCalledWith("style-1");
+    expect(stabilityService.generateImage).toHaveBeenCalledWith({
+      prompt: "a cozy cafe portrait",
+      negativePrompt: "blurry, low quality",
+      aspectRatio: undefined,
+      style: undefined,
+    });
+    expect(creationsModel.addCreation).toHaveBeenCalledWith({
+      userId: "user-1",
+      styleId: "style-1",
+      styleName: "Café Muse",
+      imageUrl: "https://example.com/generated.webp",
+    });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("prefers an explicitly-sent negativePrompt over the resolved style's own", async () => {
+    styleModel.getStyleById.mockResolvedValue({
+      id: "style-1",
+      name: "Café Muse",
+      prompt: "a cozy cafe portrait",
+      negativePrompt: "blurry, low quality",
+    });
+    const { req, res, next } = makeReqRes({
+      prompt: null,
+      styleId: "style-1",
+      negativePrompt: "extra limbs",
+    });
+
+    await generateImage(req, res, next);
+
+    expect(stabilityService.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({ negativePrompt: "extra limbs" })
+    );
+  });
+
+  it("does not resolve styleId when prompt is already non-blank", async () => {
+    const { req, res, next } = makeReqRes({ prompt: "explicit prompt", styleId: "style-1" });
+
+    await generateImage(req, res, next);
+
+    expect(styleModel.getStyleById).not.toHaveBeenCalled();
+    expect(stabilityService.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "explicit prompt" })
+    );
+  });
+
+  it("rejects with VALIDATION_ERROR when styleId doesn't resolve to a style", async () => {
+    styleModel.getStyleById.mockResolvedValue(undefined);
+    const { req, res, next } = makeReqRes({ prompt: null, styleId: "does-not-exist" });
+
+    await generateImage(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "VALIDATION_ERROR", statusCode: 400 })
+    );
+    expect(walletService.deductBalance).not.toHaveBeenCalled();
+    expect(stabilityService.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects with VALIDATION_ERROR when the resolved style has a blank prompt", async () => {
+    styleModel.getStyleById.mockResolvedValue({ id: "style-1", name: "Empty Style", prompt: "" });
+    const { req, res, next } = makeReqRes({ prompt: null, styleId: "style-1" });
+
+    await generateImage(req, res, next);
+
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "VALIDATION_ERROR", statusCode: 400 })
+    );
     expect(stabilityService.generateImage).not.toHaveBeenCalled();
   });
 

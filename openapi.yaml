@@ -1061,7 +1061,11 @@ paths:
         credits atomically before calling the AI provider, refunds on failure
         - same flow as /api/generate. Fully independent of /api/generate
         (style-transfer) and the internal auto-tagging service otherwise -
-        separate service/controller/route, no shared state.
+        separate service/controller/route, no shared state. At least one of
+        prompt/styleId is required - GET /api/styles never exposes a style's
+        prompt text to the client, so styleId lets the caller ask for a
+        style's prompt to be resolved server-side instead of supplying it
+        directly (mirrors /api/generate's own server-side resolution).
       security: [{ userBearerAuth: [] }]
       requestBody:
         required: true
@@ -1070,11 +1074,11 @@ paths:
             schema:
               type: object
               properties:
-                prompt: { type: string }
+                prompt: { type: string, description: "Raw prompt text. Omit and send styleId instead to have the server resolve it." }
+                styleId: { type: string, format: uuid, description: "Resolves prompt/negativePrompt server-side when prompt is omitted." }
                 negativePrompt: { type: string }
                 aspectRatio: { type: string, example: "16:9" }
                 style: { type: string, example: "photographic" }
-              required: [prompt]
       responses:
         '200': { description: Generated, content: { application/json: { schema: { $ref: '#/components/schemas/AiGenerateResult' } } } }
         '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
