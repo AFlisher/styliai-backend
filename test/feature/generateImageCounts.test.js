@@ -32,7 +32,7 @@ function gen(userId, styleId, fileCount) {
 beforeEach(() => {
   fakeDb.reset();
   generationService.generate.mockReset();
-  generationService.generate.mockResolvedValue("http://cdn/out.png");
+  generationService.generate.mockResolvedValue({ imageUrl: "http://cdn/out.png", thumbnailUrl: "http://cdn/out-thumb.webp" });
 });
 
 describe("image count enforcement on generate", () => {

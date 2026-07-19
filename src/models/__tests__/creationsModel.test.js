@@ -29,7 +29,7 @@ describe("creationsModel", () => {
 
   describe("addCreation", () => {
     it("inserts with the given fields and returns the new row", async () => {
-      const row = { id: "c1", styleId: "s1", styleName: "Style", imageUrl: "url", createdAt: "t" };
+      const row = { id: "c1", styleId: "s1", styleName: "Style", imageUrl: "url", thumbnailUrl: "thumb-url", createdAt: "t" };
       db.query.mockResolvedValue({ rows: [row] });
 
       const result = await addCreation({
@@ -37,23 +37,24 @@ describe("creationsModel", () => {
         styleId: "s1",
         styleName: "Style",
         imageUrl: "url",
+        thumbnailUrl: "thumb-url",
       });
 
       expect(result).toEqual(row);
       expect(db.query).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO creations"),
-        ["user-1", "s1", "Style", "url", null]
+        ["user-1", "s1", "Style", "url", "thumb-url", null]
       );
     });
 
-    it("defaults styleId to null when not provided (e.g. a deleted style)", async () => {
+    it("defaults styleId and thumbnailUrl to null when not provided (e.g. a deleted style)", async () => {
       db.query.mockResolvedValue({ rows: [{ id: "c1" }] });
 
       await addCreation({ userId: "user-1", styleName: "Style", imageUrl: "url" });
 
       expect(db.query).toHaveBeenCalledWith(
         expect.any(String),
-        ["user-1", null, "Style", "url", null]
+        ["user-1", null, "Style", "url", null, null]
       );
     });
 
@@ -69,7 +70,7 @@ describe("creationsModel", () => {
 
       expect(db.query).toHaveBeenCalledWith(
         expect.any(String),
-        ["user-1", null, "Style", "url", "2024-01-01T00:00:00.000Z"]
+        ["user-1", null, "Style", "url", null, "2024-01-01T00:00:00.000Z"]
       );
     });
   });

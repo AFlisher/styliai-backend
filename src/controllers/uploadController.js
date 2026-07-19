@@ -1,5 +1,6 @@
-const supabase = require("../config/supabase");
-const { v4: uuid } = require("uuid");
+const imageStorageService = require("../services/imageStorageService");
+
+const STYLE_IMAGES_BUCKET = "style-images";
 
 async function uploadImage(req, res) {
   try {
@@ -9,25 +10,15 @@ async function uploadImage(req, res) {
       });
     }
 
-    const fileExt = req.file.originalname.split(".").pop();
-
-    const fileName = `${uuid()}.${fileExt}`;
-
-    const { error } = await supabase.storage
-      .from("style-images")
-      .upload(fileName, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: false,
-      });
-
-    if (error) throw error;
-
-    const { data } = supabase.storage
-      .from("style-images")
-      .getPublicUrl(fileName);
+    const { url, thumbnailUrl } = await imageStorageService.uploadOriginalWithThumbnail({
+      buffer: req.file.buffer,
+      mimeType: req.file.mimetype,
+      bucket: STYLE_IMAGES_BUCKET,
+    });
 
     return res.json({
-      url: data.publicUrl,
+      url,
+      thumbnailUrl,
     });
 
   } catch (err) {
@@ -49,26 +40,16 @@ async function deleteImage(req, res) {
       });
     }
 
-    let fileName;
     try {
-      fileName = new URL(url).pathname.split("/").pop();
-    } catch {
-      return res.status(400).json({
-        message: "Invalid image URL.",
-      });
+      await imageStorageService.deleteOriginalAndThumbnail({ bucket: STYLE_IMAGES_BUCKET, url });
+    } catch (err) {
+      if (err.message === "INVALID_IMAGE_URL") {
+        return res.status(400).json({
+          message: "Invalid image URL.",
+        });
+      }
+      throw err;
     }
-
-    if (!fileName) {
-      return res.status(400).json({
-        message: "Invalid image URL.",
-      });
-    }
-
-    const { error } = await supabase.storage
-      .from("style-images")
-      .remove([fileName]);
-
-    if (error) throw error;
 
     return res.status(204).send();
 

@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "create-admin": "node src/utils/createAdmin.js",
+    "backfill-thumbnails": "node src/utils/backfillThumbnails.js",
     "test": "jest"
   },
   "keywords": [],
@@ -27,11 +28,15 @@
     "morgan": "^1.11.0",
     "multer": "^2.2.0",
     "pg": "^8.22.0",
+    "sharp": "^0.33.5",
     "uuid": "^14.0.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "jest": "^30.4.2",
     "supertest": "^7.2.2"
+  },
+  "allowScripts": {
+    "sharp@0.33.5": true
   }
 }

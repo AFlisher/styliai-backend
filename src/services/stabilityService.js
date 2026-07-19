@@ -15,7 +15,7 @@
  */
 
 const { v4: uuid } = require("uuid");
-const supabase = require("../config/supabase");
+const imageStorageService = require("./imageStorageService");
 
 const STABILITY_ENDPOINT = "https://api.stability.ai/v2beta/stable-image/generate/core";
 const REQUEST_TIMEOUT_MS = 60000;
@@ -74,26 +74,21 @@ function errorKindForStatus(status) {
 const CREATIONS_BUCKET = "creations";
 
 async function uploadToSupabase(buffer, outputFormat) {
-  const extension = outputFormat === "jpeg" ? "jpg" : outputFormat;
-  const filename = `stability-${uuid()}.${extension}`;
   const contentType = `image/${outputFormat}`;
 
-  const { error } = await supabase.storage
-    .from(CREATIONS_BUCKET)
-    .upload(filename, buffer, {
-      contentType,
-      upsert: false,
+  try {
+    return await imageStorageService.uploadOriginalWithThumbnail({
+      buffer,
+      mimeType: contentType,
+      bucket: CREATIONS_BUCKET,
+      baseName: `stability-${uuid()}`,
     });
-
-  if (error) {
+  } catch (err) {
     throw new StabilityApiError(
       "upload_failed",
-      `Failed to store the generated image: ${error.message}`
+      `Failed to store the generated image: ${err.message}`
     );
   }
-
-  const { data } = supabase.storage.from(CREATIONS_BUCKET).getPublicUrl(filename);
-  return data.publicUrl;
 }
 
 /**
@@ -173,10 +168,11 @@ async function generateImage({ prompt, negativePrompt, aspectRatio, style }) {
     throw new StabilityApiError("provider_error", "Stability AI returned an empty image.");
   }
 
-  const imageUrl = await uploadToSupabase(buffer, "webp");
+  const { url: imageUrl, thumbnailUrl } = await uploadToSupabase(buffer, "webp");
 
   return {
     imageUrl,
+    thumbnailUrl,
     seed: response.headers.get("seed") || undefined,
     finishReason: response.headers.get("finish-reason") || undefined,
   };

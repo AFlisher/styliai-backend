@@ -8,6 +8,7 @@ async function getCreationsByUser(userId) {
       style_id AS "styleId",
       style_name AS "styleName",
       image_url AS "imageUrl",
+      thumbnail_url AS "thumbnailUrl",
       created_at AS "createdAt"
     FROM creations
     WHERE user_id = $1
@@ -18,19 +19,20 @@ async function getCreationsByUser(userId) {
   return result.rows;
 }
 
-async function addCreation({ userId, styleId, styleName, imageUrl, createdAt }) {
+async function addCreation({ userId, styleId, styleName, imageUrl, thumbnailUrl, createdAt }) {
   const result = await db.query(
     `
-    INSERT INTO creations (user_id, style_id, style_name, image_url, created_at)
-    VALUES ($1, $2, $3, $4, COALESCE($5, CURRENT_TIMESTAMP))
+    INSERT INTO creations (user_id, style_id, style_name, image_url, thumbnail_url, created_at)
+    VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_TIMESTAMP))
     RETURNING
       id,
       style_id AS "styleId",
       style_name AS "styleName",
       image_url AS "imageUrl",
+      thumbnail_url AS "thumbnailUrl",
       created_at AS "createdAt"
     `,
-    [userId, styleId ?? null, styleName, imageUrl, createdAt ?? null]
+    [userId, styleId ?? null, styleName, imageUrl, thumbnailUrl ?? null, createdAt ?? null]
   );
   return result.rows[0];
 }

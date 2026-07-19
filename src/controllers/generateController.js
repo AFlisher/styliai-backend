@@ -106,8 +106,11 @@ async function generateImage(req, res, next) {
 
     // 3. Invoke generation orchestration service (uploads image, calls AI)
     let generatedImageUrl;
+    let generatedThumbnailUrl;
     try {
-      generatedImageUrl = await generationService.generate(files, styleId, finalPrompt);
+      const result = await generationService.generate(files, styleId, finalPrompt);
+      generatedImageUrl = result.imageUrl;
+      generatedThumbnailUrl = result.thumbnailUrl;
     } catch (genErr) {
       // Generation failed after the charge already succeeded - refund so the
       // user isn't charged for a failed generation. A refund failure is a
@@ -144,6 +147,7 @@ async function generateImage(req, res, next) {
         styleId,
         styleName: style.name,
         imageUrl: generatedImageUrl,
+        thumbnailUrl: generatedThumbnailUrl,
       });
     } catch (creationErr) {
       console.error("[generateImage] Failed to record creation history:", creationErr.message);
@@ -165,7 +169,8 @@ async function generateImage(req, res, next) {
     // 5. Return JSON payload
     return res.status(200).json({
       success: true,
-      generatedImageUrl
+      generatedImageUrl,
+      thumbnailUrl: generatedThumbnailUrl,
     });
 
   } catch (err) {

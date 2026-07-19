@@ -58,6 +58,7 @@ describe("stabilityController.generateImage", () => {
     walletService.addBalance.mockResolvedValue(10);
     stabilityService.generateImage.mockResolvedValue({
       imageUrl: "https://example.com/generated.webp",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
     creationsModel.addCreation.mockResolvedValue({ id: "creation-1" });
     jest.spyOn(console, "error").mockImplementation(() => {});
@@ -89,6 +90,7 @@ describe("stabilityController.generateImage", () => {
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       imageUrl: "https://example.com/generated.webp",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
     expect(walletService.addBalance).not.toHaveBeenCalled();
     expect(creationsModel.addCreation).toHaveBeenCalledWith({
@@ -96,6 +98,7 @@ describe("stabilityController.generateImage", () => {
       styleId: null,
       styleName: "Stability AI Text-to-Image",
       imageUrl: "https://example.com/generated.webp",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
     expect(next).not.toHaveBeenCalled();
   });
@@ -110,6 +113,7 @@ describe("stabilityController.generateImage", () => {
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       imageUrl: "https://example.com/generated.webp",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
     expect(next).not.toHaveBeenCalled();
   });
@@ -166,6 +170,7 @@ describe("stabilityController.generateImage", () => {
       styleId: "style-1",
       styleName: "Café Muse",
       imageUrl: "https://example.com/generated.webp",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
     expect(next).not.toHaveBeenCalled();
   });
