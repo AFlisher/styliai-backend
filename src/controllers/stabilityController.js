@@ -138,6 +138,7 @@ async function generateImage(req, res, next) {
         styleId: resolvedStyle ? resolvedStyle.id : null,
         styleName: resolvedStyle ? resolvedStyle.name : CREATION_STYLE_NAME,
         imageUrl: result.imageUrl,
+        thumbnailUrl: result.thumbnailUrl,
       });
     } catch (creationErr) {
       console.error("[stabilityController] Failed to record creation history:", creationErr.message);
@@ -146,6 +147,7 @@ async function generateImage(req, res, next) {
     return res.status(200).json({
       success: true,
       imageUrl: result.imageUrl,
+      thumbnailUrl: result.thumbnailUrl,
     });
   } catch (err) {
     if (err instanceof AppError) {

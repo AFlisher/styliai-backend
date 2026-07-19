@@ -40,7 +40,10 @@ describe("generateController.generateImage", () => {
     styleModel.getStyleById.mockResolvedValue(ENABLED_STYLE);
     walletService.deductBalance.mockResolvedValue(8);
     walletService.addBalance.mockResolvedValue(10);
-    generationService.generate.mockResolvedValue("https://example.com/generated.png");
+    generationService.generate.mockResolvedValue({
+      imageUrl: "https://example.com/generated.png",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
+    });
     creationsModel.addCreation.mockResolvedValue({ id: "creation-1" });
     jest.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -58,6 +61,7 @@ describe("generateController.generateImage", () => {
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       generatedImageUrl: "https://example.com/generated.png",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
     expect(walletService.deductBalance).toHaveBeenCalledTimes(1);
     expect(walletService.deductBalance).toHaveBeenCalledWith("user-1", 2, "generation", "Image generated");
@@ -69,6 +73,7 @@ describe("generateController.generateImage", () => {
       styleId: "style-1",
       styleName: "Test Style",
       imageUrl: "https://example.com/generated.png",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
   });
 
@@ -82,6 +87,7 @@ describe("generateController.generateImage", () => {
     expect(res.json).toHaveBeenCalledWith({
       success: true,
       generatedImageUrl: "https://example.com/generated.png",
+      thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
     expect(next).not.toHaveBeenCalled();
   });

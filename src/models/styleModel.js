@@ -10,6 +10,7 @@ async function getAllStyles() {
       prompt,
       negative_prompt AS "negativePrompt",
       cover_image AS "coverImage",
+      cover_image_thumbnail AS "coverImageThumbnail",
       credit_cost AS "creditCost",
       min_images AS "minImages",
       max_images AS "maxImages",
@@ -38,6 +39,7 @@ async function getStyles(filters = {}) {
       s.prompt,
       s.negative_prompt AS "negativePrompt",
       s.cover_image AS "coverImage",
+      s.cover_image_thumbnail AS "coverImageThumbnail",
       s.credit_cost AS "creditCost",
       s.min_images AS "minImages",
       s.max_images AS "maxImages",
@@ -96,6 +98,7 @@ async function getPublicStyles(filters = {}) {
       category_id AS "categoryId",
       name,
       cover_image AS "coverImage",
+      cover_image_thumbnail AS "coverImageThumbnail",
       credit_cost AS "creditCost",
       min_images AS "minImages",
       max_images AS "maxImages",
@@ -152,6 +155,7 @@ async function getPublicStylesByIds(ids) {
       category_id AS "categoryId",
       name,
       cover_image AS "coverImage",
+      cover_image_thumbnail AS "coverImageThumbnail",
       credit_cost AS "creditCost",
       min_images AS "minImages",
       max_images AS "maxImages",
@@ -180,6 +184,7 @@ async function getStyleById(id) {
       s.prompt,
       s.negative_prompt AS "negativePrompt",
       s.cover_image AS "coverImage",
+      s.cover_image_thumbnail AS "coverImageThumbnail",
       s.credit_cost AS "creditCost",
       s.min_images AS "minImages",
       s.max_images AS "maxImages",
@@ -318,6 +323,7 @@ async function createStyle(style) {
         prompt,
         negative_prompt,
         cover_image,
+        cover_image_thumbnail,
         credit_cost,
         is_trending,
         is_premium,
@@ -328,9 +334,9 @@ async function createStyle(style) {
         max_images
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9,
-        COALESCE($10, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM styles WHERE category_id = $1)),
-        $11, $12, $13
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+        COALESCE($11, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM styles WHERE category_id = $1)),
+        $12, $13, $14
       )
       RETURNING id
       `,
@@ -340,6 +346,7 @@ async function createStyle(style) {
         style.prompt,
         style.negativePrompt,
         style.coverImage,
+        style.coverImageThumbnail ?? null,
         style.creditCost ?? 1,
         style.isTrending,
         style.isPremium,
@@ -382,16 +389,17 @@ async function updateStyle(id, style) {
         prompt = $3,
         negative_prompt = $4,
         cover_image = $5,
-        credit_cost = $6,
-        is_trending = $7,
-        is_premium = $8,
-        is_enabled = $9,
-        sort_order = $10,
-        tags_auto_assigned = COALESCE($11, tags_auto_assigned),
-        min_images = $12,
-        max_images = $13,
+        cover_image_thumbnail = $6,
+        credit_cost = $7,
+        is_trending = $8,
+        is_premium = $9,
+        is_enabled = $10,
+        sort_order = $11,
+        tags_auto_assigned = COALESCE($12, tags_auto_assigned),
+        min_images = $13,
+        max_images = $14,
         updated_at = NOW()
-      WHERE id = $14
+      WHERE id = $15
       RETURNING id
       `,
       [
@@ -400,6 +408,7 @@ async function updateStyle(id, style) {
         style.prompt,
         style.negativePrompt,
         style.coverImage,
+        style.coverImageThumbnail ?? null,
         style.creditCost ?? 1,
         style.isTrending,
         style.isPremium,

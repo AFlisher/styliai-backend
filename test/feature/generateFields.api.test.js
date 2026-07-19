@@ -32,7 +32,7 @@ const finalPromptArg = () => generationService.generate.mock.calls[0][2];
 beforeEach(() => {
   fakeDb.reset();
   generationService.generate.mockReset();
-  generationService.generate.mockResolvedValue("http://cdn/out.png");
+  generationService.generate.mockResolvedValue({ imageUrl: "http://cdn/out.png", thumbnailUrl: "http://cdn/out-thumb.webp" });
 });
 
 describe("template resolution on generate", () => {

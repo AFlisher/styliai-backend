@@ -120,6 +120,13 @@ async function runMigration() {
       console.log("✅ Auto-tags migration completed successfully!");
     }
 
+    const thumbnailsSqlPath = path.join(__dirname, '../../migration_thumbnails.sql');
+    if (fs.existsSync(thumbnailsSqlPath)) {
+      const thumbnailsSql = fs.readFileSync(thumbnailsSqlPath, 'utf8');
+      await client.query(thumbnailsSql);
+      console.log("✅ Thumbnails migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);

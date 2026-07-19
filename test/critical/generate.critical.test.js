@@ -35,7 +35,7 @@ describe("FT-011 / REG-002 — successful generation charges exactly once", () =
   it("deducts credits, returns the image, and records the ledger + creation counter", async () => {
     fakeDb.seedUser({ id: "g1", balance: 10, email_verified: true });
     fakeDb.seedStyle({ id: "s1", creditCost: 2, isEnabled: true });
-    generationService.generate.mockResolvedValue("http://cdn/out.png");
+    generationService.generate.mockResolvedValue({ imageUrl: "http://cdn/out.png", thumbnailUrl: "http://cdn/out-thumb.webp" });
 
     const res = await request(app)
       .post("/api/generate")

@@ -12,14 +12,17 @@
  *   6. Return public URL.
  */
 
-const supabase = require("../../config/supabase");
 const styleModel = require("../../models/styleModel");
 const promptBuilder = require("../../utils/promptBuilder");
+const imageStorageService = require("../imageStorageService");
 
 const GeminiProvider = require("./geminiProvider");
 const FalProvider = require("./falProvider");
 
-const { v4: uuid } = require("uuid");
+// Generated style-transfer output lives in the same bucket as admin-uploaded
+// style images, unchanged from before the thumbnail system - only the
+// original/thumbs path split inside it is new (see imageStorageService).
+const STYLE_IMAGES_BUCKET = "style-images";
 
 /**
  * Returns the configured AI provider.
@@ -42,44 +45,15 @@ function getProvider() {
 }
 
 /**
- * Upload generated image to Supabase Storage.
+ * Upload the generated original image to Supabase Storage, plus its
+ * browsing thumbnail (see imageStorageService.uploadOriginalWithThumbnail).
  */
-async function uploadToSupabase(buffer, mimetype, extension) {
-  const filename = `${uuid()}.${extension}`;
-
-  const { error } = await supabase.storage
-    .from("style-images")
-    .upload(filename, buffer, {
-      contentType: mimetype,
-      upsert: false,
-    });
-
-  if (error) {
-    throw new Error(
-      `[generationService] Supabase upload failed: ${error.message}`
-    );
-  }
-
-  const { data } = supabase.storage
-    .from("style-images")
-    .getPublicUrl(filename);
-
-  return data.publicUrl;
-}
-
-/**
- * Returns extension from MIME type.
- */
-function extensionFromMime(mimeType) {
-  const map = {
-    "image/jpeg": "jpg",
-    "image/jpg": "jpg",
-    "image/png": "png",
-    "image/webp": "webp",
-    "image/gif": "gif",
-  };
-
-  return map[mimeType] || "jpg";
+async function uploadToSupabase(buffer, mimetype) {
+  return imageStorageService.uploadOriginalWithThumbnail({
+    buffer,
+    mimeType: mimetype,
+    bucket: STYLE_IMAGES_BUCKET,
+  });
 }
 
 /**
@@ -124,17 +98,9 @@ async function generate(fileOrFiles, styleId, finalPrompt) {
     negativePrompt: promptData.negativePrompt,
   });
 
-  // Output extension
-  const extension = extensionFromMime(file.mimetype);
-
-  // Upload to Supabase
-  const imageUrl = await uploadToSupabase(
-    generatedBuffer,
-    file.mimetype,
-    extension
-  );
-
-  return imageUrl;
+  // Upload the original plus its browsing thumbnail.
+  const { url: imageUrl, thumbnailUrl } = await uploadToSupabase(generatedBuffer, file.mimetype);
+  return { imageUrl, thumbnailUrl };
 }
 
 module.exports = {
