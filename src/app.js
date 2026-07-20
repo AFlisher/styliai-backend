@@ -21,15 +21,36 @@ const app = express();
 
 // Railway puts the app behind two hops (a public edge, then an internal
 // load balancer connecting over its own 100.64.0.0/10 CGNAT range) - without
-// this, req.ip resolves to one of those internal addresses rather than the
-// real client IP. `trust proxy: 1` was tried first but only strips one hop,
-// so it resolved to Railway's own edge IP - confirmed via a temporary
-// diagnostic endpoint, e.g. X-Forwarded-For: "<real client ip>, <railway edge ip>"
-// with req.ip landing on the second (wrong) entry. Since the app is only
-// ever reached through Railway's own network (never directly exposed),
-// `true` (trust the whole forwarded chain) is safe and doesn't hardcode a
-// hop count that could change as Railway's infra evolves.
-app.set('trust proxy', true);
+// trusting the proxy chain, req.ip resolves to one of those internal
+// addresses rather than the real client IP. `trust proxy: 1` was tried
+// first but only strips one hop, so it resolved to Railway's own edge IP -
+// confirmed via a temporary diagnostic endpoint, e.g.
+// X-Forwarded-For: "<real client ip>, <railway edge ip>" with req.ip
+// landing on the second (wrong) entry.
+//
+// `true` "fixed" that by trusting the whole X-Forwarded-For chain
+// unconditionally, but that's exactly what express-rate-limit's
+// ERR_ERL_PERMISSIVE_TRUST_PROXY guards against (see
+// node_modules/express-rate-limit/dist/index.cjs, validations.trustProxy):
+// with `true`, proxy-addr walks the *entire* header with no boundary, so a
+// client can prepend arbitrary fake hops to X-Forwarded-For and have the
+// leftmost one - fully attacker-controlled - accepted as req.ip, letting
+// them mint a "new" IP on every request and bypass IP-based rate limits.
+//
+// Trusting Railway's actual internal CIDR range instead of `true` fixes
+// both problems at once: proxy-addr (via the `forwarded` + `proxy-addr`
+// packages Express uses internally) walks the chain starting from the
+// verified socket address and keeps trusting hops only while their address
+// falls inside 100.64.0.0/10, stopping at the first hop that doesn't - which
+// is the real client, however many internal hops Railway's edge/LB chain
+// actually has. An external attacker's traffic cannot itself originate from
+// 100.64.0.0/10 (a private, non-routable RFC 6598 range Railway assigns
+// internally), so a spoofed X-Forwarded-For entry claiming to be from that
+// range is never reached as "trusted" - the walk stops at the attacker's own
+// real hop first. This is also why a bare hop count (e.g. `2`) was avoided:
+// it would silently break again, with no validation error, if Railway adds
+// or removes an internal hop.
+app.set('trust proxy', ['loopback', '100.64.0.0/10']);
 
 // Configure helmet with custom CSP for our forms
 app.use(helmet({
@@ -136,6 +157,19 @@ app.use('/api/notifications', notificationRoutes);
 // Default endpoint
 app.get('/', (req, res) => {
   res.json({ message: "StyliAI Auth Server is running 🚀" });
+});
+
+// TEMPORARY DEBUG ENDPOINT - verifies req.ip resolves to the real client
+// through Railway's proxy chain after the trust proxy fix. No secrets
+// exposed (just connection metadata); remove once verified.
+app.get('/api/debug/ip', (req, res) => {
+  res.json({
+    resolvedIp: req.ip,
+    ips: req.ips,
+    xForwardedFor: req.headers['x-forwarded-for'] || null,
+    socketRemoteAddress: req.socket.remoteAddress,
+    trustProxySetting: req.app.get('trust proxy')
+  });
 });
 
 // Unhandled Route Handler (404)
