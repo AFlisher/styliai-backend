@@ -43,7 +43,18 @@ app.use(helmet({
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "blob:"]
     }
-  }
+  },
+  // helmet's default is Referrer-Policy: no-referrer. For a plain HTML form
+  // POST (navigation, not fetch/XHR), browsers derive the Origin header from
+  // the page's referrer policy just like they do the Referer header: under
+  // no-referrer, an unsafe-method request sends the literal string "null" as
+  // Origin instead of the real page origin, which the CORS whitelist below
+  // correctly - but unhelpfully - rejects even for the reset-password page's
+  // own same-origin form. "same-origin" fixes that (full referrer/origin is
+  // sent to same-origin destinations) while still sending nothing to actual
+  // cross-origin destinations (e.g. the Google Fonts/cdnjs <link> tags below),
+  // so no page URL or token ever leaks to a third party either way.
+  referrerPolicy: { policy: "same-origin" }
 }));
 
 // Comma-separated list of allowed origins, configurable per-environment so new
@@ -66,22 +77,42 @@ const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
   ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
   : DEFAULT_ALLOWED_ORIGINS;
 
-app.use(cors({
-  origin: function (origin, callback) {
-    // TEMPORARY DEBUG LOGGING - remove after CORS issue is confirmed fixed
-    console.log("Incoming Origin:", origin);
-    console.log("Allowed Origins:", allowedOrigins);
+// Using the per-request delegate form (instead of a static options object)
+// only so the TEMPORARY DEBUG LOGGING below can see the full request - the
+// plain origin-function form the cors package normally takes only receives
+// the Origin header value, not req.
+app.use(cors(function (req, callback) {
+  const origin = req.headers.origin;
 
-    // السماح للطلبات بدون Origin (مثل Postman)
-    if (!origin) return callback(null, true);
+  // TEMPORARY DEBUG LOGGING - remove after CORS issue is confirmed fixed
+  console.log("typeof origin:", typeof origin);
+  console.log("JSON.stringify(origin):", JSON.stringify(origin));
+  console.log("req.headers.origin:", req.headers.origin);
+  console.log("req.headers.referer:", req.headers.referer);
+  console.log("req.headers.host:", req.headers.host);
+  console.log("req.method:", req.method);
+  console.log("req.path:", req.path);
+  console.log("Allowed Origins:", allowedOrigins);
 
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
+  let isAllowed;
 
+  // السماح للطلبات بدون Origin (مثل Postman)
+  if (!origin) {
+    isAllowed = true;
+  } else {
+    // origin is intentionally matched only against the explicit whitelist -
+    // the literal string "null" (sent by browsers on same-origin POSTs when
+    // Referrer-Policy suppresses the referrer, see helmet() config above) is
+    // NOT special-cased here, since a sandboxed iframe or file:// page can
+    // trivially forge that same literal value.
+    isAllowed = allowedOrigins.includes(origin);
+  }
+
+  if (!isAllowed) {
     return callback(new Error("Not allowed by CORS"));
-  },
-  credentials: true,
+  }
+
+  callback(null, { origin: true, credentials: true });
 }));
 
 app.use(morgan("dev"));
