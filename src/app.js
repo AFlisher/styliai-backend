@@ -104,42 +104,23 @@ const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
   ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
   : DEFAULT_ALLOWED_ORIGINS;
 
-// Using the per-request delegate form (instead of a static options object)
-// only so the TEMPORARY DEBUG LOGGING below can see the full request - the
-// plain origin-function form the cors package normally takes only receives
-// the Origin header value, not req.
-app.use(cors(function (req, callback) {
-  const origin = req.headers.origin;
+app.use(cors({
+  origin: function (origin, callback) {
+    // السماح للطلبات بدون Origin (مثل Postman)
+    if (!origin) return callback(null, true);
 
-  // TEMPORARY DEBUG LOGGING - remove after CORS issue is confirmed fixed
-  console.log("typeof origin:", typeof origin);
-  console.log("JSON.stringify(origin):", JSON.stringify(origin));
-  console.log("req.headers.origin:", req.headers.origin);
-  console.log("req.headers.referer:", req.headers.referer);
-  console.log("req.headers.host:", req.headers.host);
-  console.log("req.method:", req.method);
-  console.log("req.path:", req.path);
-  console.log("Allowed Origins:", allowedOrigins);
-
-  let isAllowed;
-
-  // السماح للطلبات بدون Origin (مثل Postman)
-  if (!origin) {
-    isAllowed = true;
-  } else {
     // origin is intentionally matched only against the explicit whitelist -
     // the literal string "null" (sent by browsers on same-origin POSTs when
     // Referrer-Policy suppresses the referrer, see helmet() config above) is
     // NOT special-cased here, since a sandboxed iframe or file:// page can
     // trivially forge that same literal value.
-    isAllowed = allowedOrigins.includes(origin);
-  }
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
 
-  if (!isAllowed) {
     return callback(new Error("Not allowed by CORS"));
-  }
-
-  callback(null, { origin: true, credentials: true });
+  },
+  credentials: true,
 }));
 
 app.use(morgan("dev"));
@@ -163,19 +144,6 @@ app.use('/api/notifications', notificationRoutes);
 // Default endpoint
 app.get('/', (req, res) => {
   res.json({ message: "StyliAI Auth Server is running 🚀" });
-});
-
-// TEMPORARY DEBUG ENDPOINT - verifies req.ip resolves to the real client
-// through Railway's proxy chain after the trust proxy fix. No secrets
-// exposed (just connection metadata); remove once verified.
-app.get('/api/debug/ip', (req, res) => {
-  res.json({
-    resolvedIp: req.ip,
-    ips: req.ips,
-    xForwardedFor: req.headers['x-forwarded-for'] || null,
-    socketRemoteAddress: req.socket.remoteAddress,
-    trustProxySetting: req.app.get('trust proxy')
-  });
 });
 
 // Unhandled Route Handler (404)
