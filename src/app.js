@@ -48,11 +48,19 @@ app.use(helmet({
 
 // Comma-separated list of allowed origins, configurable per-environment so new
 // preview/staging deployments don't require a backend code change.
+//
+// BACKEND_URL is included because the email-verification and reset-password
+// pages are server-rendered by this same app (src/utils/htmlTemplates.js) and
+// the reset-password page submits a plain HTML form back to this origin.
+// Browsers still attach an Origin header to that POST even though it's
+// same-origin, so the cors() origin check below sees it like any other
+// caller and rejects it unless the backend's own origin is whitelisted.
 const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "https://styliai-admin-dashboard-z8it.vercel.app",
   "https://styliai-admin-dashboard.vercel.app",
-];
+  process.env.BACKEND_URL,
+].filter(Boolean);
 
 const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
   ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim()).filter(Boolean)
@@ -60,6 +68,10 @@ const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
 
 app.use(cors({
   origin: function (origin, callback) {
+    // TEMPORARY DEBUG LOGGING - remove after CORS issue is confirmed fixed
+    console.log("Incoming Origin:", origin);
+    console.log("Allowed Origins:", allowedOrigins);
+
     // السماح للطلبات بدون Origin (مثل Postman)
     if (!origin) return callback(null, true);
 
