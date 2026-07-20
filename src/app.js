@@ -19,38 +19,44 @@ const notificationRoutes = require("./routes/notificationRoutes");
 
 const app = express();
 
-// Railway puts the app behind two hops (a public edge, then an internal
-// load balancer connecting over its own 100.64.0.0/10 CGNAT range) - without
-// trusting the proxy chain, req.ip resolves to one of those internal
-// addresses rather than the real client IP. `trust proxy: 1` was tried
-// first but only strips one hop, so it resolved to Railway's own edge IP -
-// confirmed via a temporary diagnostic endpoint, e.g.
-// X-Forwarded-For: "<real client ip>, <railway edge ip>" with req.ip
-// landing on the second (wrong) entry.
+// Railway puts the app behind two real hops: a public edge (a genuine
+// public-facing IP, NOT inside any private range) and an internal load
+// balancer that connects to the container over its own 100.64.0.0/10 CGNAT
+// range. Confirmed against live production traffic via a temporary
+// diagnostic endpoint, cross-checked against the caller's real public IP
+// from two independent external services:
+//   socketRemoteAddress: 100.64.0.3            (internal LB - private)
+//   X-Forwarded-For:      "<real client>, <edge's public IP>"
 //
-// `true` "fixed" that by trusting the whole X-Forwarded-For chain
-// unconditionally, but that's exactly what express-rate-limit's
+// This is the second time this exact failure mode has bitten this setting.
+// First: `trust proxy: 1`, assuming only one hop existed - it stripped only
+// the LB and landed on the edge's IP. Second: a CIDR-based trust list
+// (['loopback', '100.64.0.0/10']), assuming both hops sit in a private
+// range - the edge's IP is public, so that config also only matched the LB
+// and stopped one hop too early, landing on the edge's IP again, just
+// reached a different way. Both were caught only by checking the resolved
+// IP against production traffic, not by trusting a local simulation.
+//
+// `true` was tried in between: it trusts the whole X-Forwarded-For chain
+// with no boundary, which is exactly what express-rate-limit's
 // ERR_ERL_PERMISSIVE_TRUST_PROXY guards against (see
 // node_modules/express-rate-limit/dist/index.cjs, validations.trustProxy):
-// with `true`, proxy-addr walks the *entire* header with no boundary, so a
-// client can prepend arbitrary fake hops to X-Forwarded-For and have the
-// leftmost one - fully attacker-controlled - accepted as req.ip, letting
-// them mint a "new" IP on every request and bypass IP-based rate limits.
+// a client can prepend arbitrary fake hops and have the leftmost one -
+// fully attacker-controlled - accepted as req.ip, letting them mint a "new"
+// IP on every request and bypass IP-based rate limits.
 //
-// Trusting Railway's actual internal CIDR range instead of `true` fixes
-// both problems at once: proxy-addr (via the `forwarded` + `proxy-addr`
-// packages Express uses internally) walks the chain starting from the
-// verified socket address and keeps trusting hops only while their address
-// falls inside 100.64.0.0/10, stopping at the first hop that doesn't - which
-// is the real client, however many internal hops Railway's edge/LB chain
-// actually has. An external attacker's traffic cannot itself originate from
-// 100.64.0.0/10 (a private, non-routable RFC 6598 range Railway assigns
-// internally), so a spoofed X-Forwarded-For entry claiming to be from that
-// range is never reached as "trusted" - the walk stops at the attacker's own
-// real hop first. This is also why a bare hop count (e.g. `2`) was avoided:
-// it would silently break again, with no validation error, if Railway adds
-// or removes an internal hop.
-app.set('trust proxy', ['loopback', '100.64.0.0/10']);
+// `2` is the verified-correct hop count: it walks past both real hops (the
+// LB via the socket address, then the edge via the first X-Forwarded-For
+// entry) and lands on the real client. It's still not spoofable - an
+// attacker can only ever prepend fake entries *before* the two genuinely
+// proxy-appended ones, never in their place, so however many fake entries
+// they add, position 2 always resolves to their real IP (verified against
+// the actual proxy-addr package with 1 and 3 prepended fake entries: both
+// still resolved to the attacker's real IP, never their spoofed one). This
+// does assume the app is only ever reached through Railway's two hops and
+// never directly exposed to the internet, same as the codebase already
+// assumed with `true` - if that ever changes, so does this number.
+app.set('trust proxy', 2);
 
 // Configure helmet with custom CSP for our forms
 app.use(helmet({
