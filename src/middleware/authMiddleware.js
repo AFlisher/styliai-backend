@@ -34,4 +34,21 @@ function authMiddleware(req, res, next) {
   }
 }
 
+/**
+ * Strict variant for routes shared with the Admin Dashboard (e.g.
+ * GET /api/categories, GET /api/styles). Must run after `optionalAdminAuth`
+ * so `req.admin` is already set when the caller is the dashboard - in that
+ * case this just calls next() unchecked, exactly like today. Any other
+ * caller (mobile app, anonymous) is required to present a valid Supabase
+ * user JWT, delegating to the same authMiddleware used everywhere else
+ * rather than duplicating the verification logic.
+ */
+function requireUserOrAdmin(req, res, next) {
+  if (req.admin) {
+    return next();
+  }
+  return authMiddleware(req, res, next);
+}
+
 module.exports = authMiddleware;
+module.exports.requireUserOrAdmin = requireUserOrAdmin;

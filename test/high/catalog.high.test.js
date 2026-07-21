@@ -46,38 +46,58 @@ const adminToken = () =>
 beforeEach(() => jest.clearAllMocks());
 
 describe("FT-014 — GET /api/categories", () => {
-  it("returns the category list", async () => {
+  it("rejects an anonymous caller with 401 (guests never see Categories)", async () => {
+    const res = await request(app).get("/api/categories");
+    expect(res.status).toBe(401);
+    expect(categoryModel.getAllCategories).not.toHaveBeenCalled();
+  });
+
+  it("returns the category list for an authenticated mobile user", async () => {
     categoryModel.getAllCategories.mockResolvedValue([
       { id: "c1", name: "Portraits", isEnabled: true, sortOrder: 0 },
       { id: "c2", name: "Anime", isEnabled: true, sortOrder: 1 },
     ]);
-    const res = await request(app).get("/api/categories");
+    const res = await request(app)
+      .get("/api/categories")
+      .set("Authorization", `Bearer ${userToken("u1")}`);
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
     expect(res.body[0].name).toBe("Portraits");
   });
+
+  it("returns the category list for the Admin Dashboard's admin token", async () => {
+    categoryModel.getAllCategories.mockResolvedValue([{ id: "c1", name: "Portraits", isEnabled: true, sortOrder: 0 }]);
+    const res = await request(app)
+      .get("/api/categories")
+      .set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+  });
 });
 
 describe("FT-015 / API-016 — style listing filters", () => {
-  it("?trending=true requests only enabled, trending styles (public DTO)", async () => {
-    styleModel.getPublicStyles.mockResolvedValue([{ id: "s1", name: "Trend", isTrending: true }]);
+  it("rejects an anonymous caller with 401 (guests never see Styles)", async () => {
     const res = await request(app).get("/api/styles?trending=true");
+    expect(res.status).toBe(401);
+    expect(styleModel.getPublicStyles).not.toHaveBeenCalled();
+  });
+
+  it("?trending=true requests only enabled, trending styles (public DTO) for an authenticated user", async () => {
+    styleModel.getPublicStyles.mockResolvedValue([{ id: "s1", name: "Trend", isTrending: true }]);
+    const res = await request(app)
+      .get("/api/styles?trending=true")
+      .set("Authorization", `Bearer ${userToken("u1")}`);
     expect(res.status).toBe(200);
     expect(styleModel.getPublicStyles).toHaveBeenCalledWith({ isEnabled: true, isTrending: true });
     expect(styleModel.getStyles).not.toHaveBeenCalled(); // no admin token -> public path
   });
 
-  it("?categoryId=... requests that category's enabled styles", async () => {
+  it("?categoryId=... requests that category's enabled styles for an authenticated user", async () => {
     styleModel.getPublicStyles.mockResolvedValue([]);
-    await request(app).get("/api/styles?categoryId=cat-9");
+    await request(app)
+      .get("/api/styles?categoryId=cat-9")
+      .set("Authorization", `Bearer ${userToken("u1")}`);
     expect(styleModel.getPublicStyles).toHaveBeenCalledWith({ categoryId: "cat-9", isEnabled: true });
-  });
-
-  it("?recommended=true returns [] for anonymous callers without calling the recommender", async () => {
-    const res = await request(app).get("/api/styles?recommended=true");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
-    expect(recommendationService.getPersonalizedRecommendations).not.toHaveBeenCalled();
   });
 
   it("?recommended=true returns [] when personalization is disabled", async () => {
@@ -98,9 +118,17 @@ describe("FT-015 / API-016 — style listing filters", () => {
 });
 
 describe("API-016 — GET /api/styles/:id/similar", () => {
-  it("returns ranked similar styles", async () => {
-    recommendationService.getSimilarStyles.mockResolvedValue([{ id: "sim1" }]);
+  it("rejects an anonymous caller with 401", async () => {
     const res = await request(app).get("/api/styles/abc/similar?limit=5");
+    expect(res.status).toBe(401);
+    expect(recommendationService.getSimilarStyles).not.toHaveBeenCalled();
+  });
+
+  it("returns ranked similar styles for an authenticated user", async () => {
+    recommendationService.getSimilarStyles.mockResolvedValue([{ id: "sim1" }]);
+    const res = await request(app)
+      .get("/api/styles/abc/similar?limit=5")
+      .set("Authorization", `Bearer ${userToken("u1")}`);
     expect(res.status).toBe(200);
     expect(recommendationService.getSimilarStyles).toHaveBeenCalledWith({ styleId: "abc", limit: 5 });
     expect(res.body).toHaveLength(1);
@@ -108,13 +136,15 @@ describe("API-016 — GET /api/styles/:id/similar", () => {
 
   it("returns 404 for an unknown anchor style", async () => {
     recommendationService.getSimilarStyles.mockResolvedValue(null);
-    const res = await request(app).get("/api/styles/missing/similar");
+    const res = await request(app)
+      .get("/api/styles/missing/similar")
+      .set("Authorization", `Bearer ${userToken("u1")}`);
     expect(res.status).toBe(404);
   });
 });
 
 describe("FT-022 / IT-005 — admin toggles trending; the trending filter reflects it", () => {
-  it("admin PUT updates the style, and the public trending read filters by isTrending", async () => {
+  it("admin PUT updates the style, and the trending read filters by isTrending", async () => {
     styleModel.updateStyle.mockResolvedValue({ id: "s7", isTrending: true });
     const put = await request(app)
       .put("/api/styles/s7")
@@ -124,7 +154,9 @@ describe("FT-022 / IT-005 — admin toggles trending; the trending filter reflec
     expect(styleModel.updateStyle).toHaveBeenCalled();
 
     styleModel.getPublicStyles.mockResolvedValue([{ id: "s7", isTrending: true }]);
-    const list = await request(app).get("/api/styles?trending=true");
+    const list = await request(app)
+      .get("/api/styles?trending=true")
+      .set("Authorization", `Bearer ${userToken("u1")}`);
     expect(styleModel.getPublicStyles).toHaveBeenCalledWith({ isEnabled: true, isTrending: true });
     expect(list.body.map((s) => s.id)).toContain("s7");
   });
