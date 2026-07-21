@@ -763,6 +763,23 @@ async function changePassword(req, res) {
   }
 }
 
+// LOGOUT endpoint
+async function logout(req, res) {
+  try {
+    // Revoke the refresh token server-side so a copy an attacker may hold
+    // (device compromise, log leak, etc.) stops working the moment the user
+    // logs out, instead of remaining valid for its full 30-day lifetime.
+    await db.query(
+      'UPDATE public.users SET refresh_token_hash = NULL WHERE id = $1',
+      [req.user.id]
+    );
+    return res.status(204).send();
+  } catch (err) {
+    console.error("Logout error:", err);
+    return res.status(500).json({ message: "An unexpected error occurred." });
+  }
+}
+
 module.exports = {
   register,
   verifyEmail,
@@ -775,4 +792,5 @@ module.exports = {
   resendVerification,
   googleSignIn,
   changePassword,
+  logout,
 };

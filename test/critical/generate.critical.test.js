@@ -19,7 +19,12 @@ const app = require("../../src/app");
 const fakeDb = require("./fakeDb");
 const generationService = require("../../src/services/generation/generationService");
 
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// A genuine 1x1 PNG (not just the 8-byte signature) so the magic-byte content
+// check (security fix L-2) positively identifies it as image/png.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64"
+);
 
 const userToken = (id) =>
   jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
@@ -116,6 +121,46 @@ describe("SEC-009 — generation upload enforces the image MIME allow-list", () 
     // No charge occurred for the rejected upload.
     const user = fakeDb.state.users.find((u) => u.id === "g4");
     expect(user.balance).toBe(10);
+  });
+});
+
+describe("SEC-019 — generation upload verifies actual file content, not just the declared Content-Type (L-2)", () => {
+  it("rejects a non-image payload relabeled with an allowed image Content-Type", async () => {
+    fakeDb.seedUser({ id: "g6", balance: 10, email_verified: true });
+    fakeDb.seedStyle({ id: "s6", creditCost: 1, isEnabled: true });
+
+    const res = await request(app)
+      .post("/api/generate")
+      .set("Authorization", `Bearer ${userToken("g6")}`)
+      .field("styleId", "s6")
+      // Header claims image/png, but the bytes are not a PNG (or any image) -
+      // the multer fileFilter's Content-Type check alone would let this
+      // through; the magic-byte check must catch it.
+      .attach("file", Buffer.from("this is definitely not an image, just text padding to be safe"), {
+        filename: "malicious.png",
+        contentType: "image/png",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/file type/i);
+    expect(generationService.generate).not.toHaveBeenCalled();
+    const user = fakeDb.state.users.find((u) => u.id === "g6");
+    expect(user.balance).toBe(10);
+  });
+
+  it("accepts a genuine image whose bytes match its declared Content-Type", async () => {
+    fakeDb.seedUser({ id: "g7", balance: 10, email_verified: true });
+    fakeDb.seedStyle({ id: "s7", creditCost: 1, isEnabled: true });
+    generationService.generate.mockResolvedValue({ imageUrl: "http://cdn/out.png", thumbnailUrl: "http://cdn/out-thumb.webp" });
+
+    const res = await request(app)
+      .post("/api/generate")
+      .set("Authorization", `Bearer ${userToken("g7")}`)
+      .field("styleId", "s7")
+      .attach("file", PNG, { filename: "in.png", contentType: "image/png" });
+
+    expect(res.status).toBe(200);
+    expect(generationService.generate).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1,4 +1,7 @@
-const { rateLimit, ipKeyGenerator, MINUTE, HOUR } = require("express-rate-limit");
+const { rateLimit, ipKeyGenerator } = require("express-rate-limit");
+
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
 const { ErrorCodes } = require("../utils/errors");
 
 /**
@@ -40,7 +43,16 @@ const baseOptions = {
 const LIMIT_VALUES = {};
 
 function makeLimiter(name, { windowMs, limit, message, keyGenerator }) {
+  if (!Number.isFinite(windowMs) || windowMs <= 0) {
+    throw new Error(`Invalid windowMs for limiter "${name}": ${windowMs}`);
+  }
+
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error(`Invalid limit for limiter "${name}": ${limit}`);
+  }
+
   LIMIT_VALUES[name] = { windowMs, limit };
+
   return rateLimit({
     ...baseOptions,
     windowMs,

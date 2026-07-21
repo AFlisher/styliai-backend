@@ -17,9 +17,13 @@ const userToken = (id) =>
   jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 
 beforeEach(() => fakeDb.reset());
+afterEach(() => {
+  delete process.env.ENABLE_CLIENT_AD_REWARD;
+});
 
 describe("FT-020 — rewarded-ad credit (2 ads = 1 credit, capped 1/day)", () => {
   it("grants a credit only on the 2nd ad and enforces the daily cap on the 3rd", async () => {
+    process.env.ENABLE_CLIENT_AD_REWARD = "true"; // explicit opt-in required (SEC-M2 fix)
     fakeDb.seedUser({ id: "w1", balance: 0, ads_progress: 0, email_verified: true });
     const call = () => request(app).post("/api/wallet/reward").set("Authorization", `Bearer ${userToken("w1")}`);
 
@@ -35,6 +39,50 @@ describe("FT-020 — rewarded-ad credit (2 ads = 1 credit, capped 1/day)", () =>
     const third = await call();
     expect(third.body.dailyLimitReached).toBe(true);
     expect(fakeDb.state.users.find((u) => u.id === "w1").balance).toBe(1); // no extra credit
+  });
+});
+
+describe("SEC-M2 — POST /api/wallet/reward fails closed unless explicitly enabled", () => {
+  const call = (id) => request(app).post("/api/wallet/reward").set("Authorization", `Bearer ${userToken(id)}`);
+
+  it("rejects with 410 and the exact error body when the flag is unset", async () => {
+    delete process.env.ENABLE_CLIENT_AD_REWARD;
+    fakeDb.seedUser({ id: "w-unset", balance: 0, ads_progress: 0, email_verified: true });
+
+    const res = await call("w-unset");
+
+    expect(res.status).toBe(410);
+    expect(res.body).toEqual({ error: "Use the AdMob SSV callback endpoint." });
+    expect(fakeDb.state.users.find((u) => u.id === "w-unset").balance).toBe(0);
+  });
+
+  it("rejects with 410 for any non-'true' value, e.g. \"false\"", async () => {
+    process.env.ENABLE_CLIENT_AD_REWARD = "false";
+    fakeDb.seedUser({ id: "w-false", balance: 0, ads_progress: 0, email_verified: true });
+
+    const res = await call("w-false");
+
+    expect(res.status).toBe(410);
+    expect(res.body).toEqual({ error: "Use the AdMob SSV callback endpoint." });
+  });
+
+  it("rejects with 410 for a truthy-looking but non-exact value", async () => {
+    process.env.ENABLE_CLIENT_AD_REWARD = "TRUE";
+    fakeDb.seedUser({ id: "w-caseless", balance: 0, ads_progress: 0, email_verified: true });
+
+    const res = await call("w-caseless");
+
+    expect(res.status).toBe(410);
+  });
+
+  it("grants the reward when explicitly enabled with the exact string \"true\"", async () => {
+    process.env.ENABLE_CLIENT_AD_REWARD = "true";
+    fakeDb.seedUser({ id: "w-true", balance: 0, ads_progress: 1, email_verified: true });
+
+    const res = await call("w-true");
+
+    expect(res.status).toBe(200);
+    expect(res.body.rewarded).toBe(true);
   });
 });
 

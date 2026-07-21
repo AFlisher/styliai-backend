@@ -109,6 +109,44 @@ describe("IT-003 — a valid, unique callback grants the reward", () => {
   });
 });
 
+describe("SEC-018 — a POST body cannot override the signed query-string values", () => {
+  it("grants the reward to the query string's user_id/transaction_id, ignoring a conflicting body", async () => {
+    fakeDb.seedUser({ id: "ssv-user", balance: 4, ads_progress: 1 });
+    fakeDb.seedUser({ id: "attacker-user", balance: 0, ads_progress: 1 });
+
+    const params = {
+      transaction_id: "tx-query-signed",
+      user_id: "ssv-user",
+      reward_amount: "1",
+      key_id: "3335741209",
+      signature: "c2lnbmF0dXJl",
+    };
+    const search = new URLSearchParams(params);
+
+    const res = await request(app)
+      .post(`/api/wallet/reward/verify?${search.toString()}`)
+      // A malicious/misbehaving caller supplies different identity/transaction
+      // fields in the body. Before the fix, `{ ...req.query, ...req.body }`
+      // let these silently win even though the signature only covers the
+      // query string above.
+      .send({ user_id: "attacker-user", transaction_id: "tx-attacker-controlled" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+
+    // The reward and the replay-protection claim both land on the
+    // query-string identity, not the body-supplied one.
+    expect(fakeDb.state.processedAdTx.map((t) => t.transaction_id)).toContain("tx-query-signed");
+    expect(fakeDb.state.processedAdTx.map((t) => t.transaction_id)).not.toContain("tx-attacker-controlled");
+
+    const attacker = fakeDb.state.users.find((u) => u.id === "attacker-user");
+    expect(attacker.balance).toBe(0);
+
+    const legit = fakeDb.state.users.find((u) => u.id === "ssv-user");
+    expect(legit.balance).toBe(5); // +1 credit, same as the ordinary IT-003 flow
+  });
+});
+
 describe("IT-004 / SEC-003 — replayed callbacks are ignored exactly once", () => {
   it("processes the first callback and ignores a byte-identical replay", async () => {
     fakeDb.seedUser({ id: "ssv-user", balance: 4, ads_progress: 1 });

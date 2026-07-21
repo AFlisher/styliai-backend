@@ -1,4 +1,5 @@
 const multer = require("multer");
+const { verifyImageMagicBytes } = require("../utils/verifyImageContent");
 
 // Same image allow-list as the admin upload (src/middleware/adminImageUpload.js):
 // /api/generate forwards the file to storage and the paid AI provider, so
@@ -32,27 +33,33 @@ const multerUpload = multer({
 // through to the generic 500 error handler.
 function single(fieldName) {
   return function (req, res, next) {
-    multerUpload.single(fieldName)(req, res, (err) => {
-      if (!err) {
-        return next();
+    multerUpload.single(fieldName)(req, res, async (err) => {
+      if (err) {
+        if (err.message === "INVALID_FILE_TYPE") {
+          return res.status(400).json({
+            message: "Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed.",
+          });
+        }
+
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            message: "File is too large. Maximum size is 10MB.",
+          });
+        }
+
+        console.error("Upload error:", err.message);
+        return res.status(400).json({
+          message: "File upload failed.",
+        });
       }
 
-      if (err.message === "INVALID_FILE_TYPE") {
+      if (req.file && !(await verifyImageMagicBytes(req.file.buffer, ALLOWED_MIME_TYPES))) {
         return res.status(400).json({
           message: "Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed.",
         });
       }
 
-      if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(400).json({
-          message: "File is too large. Maximum size is 10MB.",
-        });
-      }
-
-      console.error("Upload error:", err.message);
-      return res.status(400).json({
-        message: "File upload failed.",
-      });
+      next();
     });
   };
 }
@@ -64,33 +71,42 @@ function single(fieldName) {
  */
 function array(fieldName, maxCount) {
   return function (req, res, next) {
-    multerUpload.array(fieldName, maxCount)(req, res, (err) => {
-      if (!err) {
-        return next();
-      }
+    multerUpload.array(fieldName, maxCount)(req, res, async (err) => {
+      if (err) {
+        if (err.message === "INVALID_FILE_TYPE") {
+          return res.status(400).json({
+            message: "Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed.",
+          });
+        }
 
-      if (err.message === "INVALID_FILE_TYPE") {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            message: "File is too large. Maximum size is 10MB.",
+          });
+        }
+
+        if (err.code === "LIMIT_UNEXPECTED_FILE") {
+          return res.status(400).json({
+            message: `Too many files. Maximum is ${maxCount} images.`,
+          });
+        }
+
+        console.error("Upload error:", err.message);
         return res.status(400).json({
-          message: "Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed.",
+          message: "File upload failed.",
         });
       }
 
-      if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(400).json({
-          message: "File is too large. Maximum size is 10MB.",
-        });
+      const files = req.files || [];
+      for (const file of files) {
+        if (!(await verifyImageMagicBytes(file.buffer, ALLOWED_MIME_TYPES))) {
+          return res.status(400).json({
+            message: "Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed.",
+          });
+        }
       }
 
-      if (err.code === "LIMIT_UNEXPECTED_FILE") {
-        return res.status(400).json({
-          message: `Too many files. Maximum is ${maxCount} images.`,
-        });
-      }
-
-      console.error("Upload error:", err.message);
-      return res.status(400).json({
-        message: "File upload failed.",
-      });
+      next();
     });
   };
 }

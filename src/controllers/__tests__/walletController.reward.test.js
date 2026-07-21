@@ -19,8 +19,32 @@ beforeEach(() => {
   delete process.env.ENABLE_CLIENT_AD_REWARD;
 });
 
-describe("client-reported reward path (finding #3)", () => {
-  it("keeps working by default (mobile app compatibility)", async () => {
+describe("client-reported reward path (security fix M-2 — fails closed by default)", () => {
+  it("rejects with 410 and the exact error body when ENABLE_CLIENT_AD_REWARD is unset", async () => {
+    const res = makeRes();
+    const next = jest.fn();
+
+    await rewardAd({ user: { id: "user-1" } }, res, next);
+
+    expect(walletService.rewardAd).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(410);
+    expect(res.json).toHaveBeenCalledWith({ error: "Use the AdMob SSV callback endpoint." });
+  });
+
+  it("rejects with 410 when ENABLE_CLIENT_AD_REWARD=false (SSV-only mode)", async () => {
+    process.env.ENABLE_CLIENT_AD_REWARD = "false";
+    const res = makeRes();
+    const next = jest.fn();
+
+    await rewardAd({ user: { id: "user-1" } }, res, next);
+
+    expect(walletService.rewardAd).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(410);
+    expect(res.json).toHaveBeenCalledWith({ error: "Use the AdMob SSV callback endpoint." });
+  });
+
+  it("grants the reward only when explicitly enabled with ENABLE_CLIENT_AD_REWARD=true", async () => {
+    process.env.ENABLE_CLIENT_AD_REWARD = "true";
     walletService.rewardAd.mockResolvedValueOnce({ rewarded: true, balance: 5 });
     const res = makeRes();
     const next = jest.fn();
@@ -29,18 +53,6 @@ describe("client-reported reward path (finding #3)", () => {
 
     expect(walletService.rewardAd).toHaveBeenCalledWith("user-1");
     expect(res.json).toHaveBeenCalledWith({ rewarded: true, balance: 5 });
-  });
-
-  it("is rejected with 403 when ENABLE_CLIENT_AD_REWARD=false (SSV-only mode)", async () => {
-    process.env.ENABLE_CLIENT_AD_REWARD = "false";
-    const res = makeRes();
-    const next = jest.fn();
-
-    await rewardAd({ user: { id: "user-1" } }, res, next);
-
-    expect(walletService.rewardAd).not.toHaveBeenCalled();
-    const err = next.mock.calls[0][0];
-    expect(err.statusCode).toBe(403);
   });
 });
 

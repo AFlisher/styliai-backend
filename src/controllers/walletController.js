@@ -102,17 +102,14 @@ async function getWalletHistory(req, res, next) {
  */
 async function rewardAd(req, res, next) {
   try {
-    // This path trusts the client's claim of having watched an ad (bounded
-    // by the 1-credit/day cap). Once the AdMob SSV callback below is
-    // confirmed working in production, set ENABLE_CLIENT_AD_REWARD=false to
-    // retire it and rely exclusively on Google's signed server-to-server
-    // callback. Read at request time so tests and ops can flip it live.
-    if (process.env.ENABLE_CLIENT_AD_REWARD === "false") {
-      return next(new AppError(
-        ErrorCodes.VALIDATION_ERROR,
-        "Client-reported ad rewards are disabled. Rewards are granted via verified AdMob callbacks only.",
-        403
-      ));
+    // Fail closed: this path trusts the client's own claim of having watched
+    // an ad, with no cryptographic proof, unlike the AdMob SSV callback
+    // below. It must be explicitly opted into with ENABLE_CLIENT_AD_REWARD=true
+    // (e.g. during development or before the SSV callback is live) - any
+    // other value, including unset, rejects the request. Read at request
+    // time so tests and ops can flip it live.
+    if (process.env.ENABLE_CLIENT_AD_REWARD !== "true") {
+      return res.status(410).json({ error: "Use the AdMob SSV callback endpoint." });
     }
 
     const userId = req.user.id;
@@ -131,6 +128,11 @@ async function rewardAd(req, res, next) {
  */
 async function verifyRewardedAd(req, res, next) {
   try {
+    // Google's AdMob SSV callback delivers every field in the query string,
+    // which is exactly what the signature below is verified against - never
+    // merge in req.body here, or an attacker holding one validly-signed
+    // callback could replay it with a different user_id/transaction_id in a
+    // POST body while the (unrelated) query-string signature still checks out.
     const {
       user_id,
       custom_data,
@@ -139,7 +141,7 @@ async function verifyRewardedAd(req, res, next) {
       transaction_id,
       key_id,
       signature
-    } = { ...req.query, ...req.body };
+    } = req.query;
 
     const transactionId = transaction_id;
     const userId = custom_data || user_id;

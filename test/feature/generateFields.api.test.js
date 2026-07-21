@@ -18,7 +18,12 @@ const app = require("../../src/app");
 const fakeDb = require("../critical/fakeDb");
 const generationService = require("../../src/services/generation/generationService");
 
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// A genuine 1x1 PNG (not just the 8-byte signature) so the magic-byte content
+// check (security fix L-2) positively identifies it as image/png.
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64"
+);
 const token = (id) => jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 
 function gen(userId, styleId, fieldValues) {
