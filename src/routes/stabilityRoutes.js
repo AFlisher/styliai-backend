@@ -3,6 +3,8 @@ const router = express.Router();
 
 const stabilityController = require("../controllers/stabilityController");
 const authMiddleware = require("../middleware/authMiddleware");
+const concurrentGenerationLimiter = require("../middleware/concurrentGenerationLimiter");
+const { generationLimiter } = require("../middleware/rateLimiters");
 
 /**
  * Route definitions for Stability AI text-to-image generation.
@@ -11,7 +13,11 @@ const authMiddleware = require("../middleware/authMiddleware");
  *
  * POST /api/ai/generate
  * Body (application/json): { prompt, negativePrompt?, aspectRatio?, style? }
+ *
+ * Shares generationLimiter and concurrentGenerationLimiter with
+ * generateRoutes.js - same provider-cost profile, and the concurrency map is
+ * keyed by user id regardless of which of the two endpoints was called.
  */
-router.post("/generate", authMiddleware, stabilityController.generateImage);
+router.post("/generate", generationLimiter, authMiddleware, concurrentGenerationLimiter, stabilityController.generateImage);
 
 module.exports = router;

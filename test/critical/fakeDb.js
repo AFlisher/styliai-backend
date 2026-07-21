@@ -15,6 +15,7 @@
 
 const state = {
   users: [],
+  admins: [],
   processedAdTx: [],
   dailyRewards: [], // { userId, claimed }
   walletTransactions: [], // { userId, amount, type, description }
@@ -25,12 +26,25 @@ const state = {
 
 function reset() {
   state.users = [];
+  state.admins = [];
   state.processedAdTx = [];
   state.dailyRewards = [];
   state.walletTransactions = [];
   state.styles = [];
   state.styleFields = [];
   state.notifications = [];
+}
+
+function seedAdmin(a) {
+  const admin = {
+    id: a.id,
+    email: a.email,
+    full_name: a.fullName || a.full_name || "Test Admin",
+    password_hash: a.password_hash,
+    ...a,
+  };
+  state.admins.push(admin);
+  return admin;
 }
 
 function seedUser(u) {
@@ -220,6 +234,12 @@ async function query(text, params = []) {
     return { rows: [], rowCount: 1 };
   }
 
+  // ---- admins (admin login) ----
+  if (q.startsWith("SELECT") && q.includes("FROM admins")) {
+    const admin = state.admins.find((a) => a.email === params[0]);
+    return { rows: admin ? [admin] : [], rowCount: admin ? 1 : 0 };
+  }
+
   // ---- users: INSERT ----
   if (q.includes("INSERT INTO public.users")) {
     if (q.includes("google_id")) {
@@ -297,6 +317,8 @@ async function query(text, params = []) {
       user.refresh_token_hash = params[1]; // rotation on change-password
     } else if (q.includes("verification_token_hash = $1")) {
       user.verification_token_hash = params[0];
+    } else if (q.includes("SET refresh_token_hash = NULL")) {
+      user.refresh_token_hash = null; // logout revocation
     } else if (q.includes("refresh_token_hash = $1")) {
       user.refresh_token_hash = params[0];
     }
@@ -332,4 +354,4 @@ function buildSslConfig() {
   return false;
 }
 
-module.exports = { query, pool, buildSslConfig, state, reset, seedUser, seedStyle, seedWalletTx };
+module.exports = { query, pool, buildSslConfig, state, reset, seedUser, seedAdmin, seedStyle, seedWalletTx };

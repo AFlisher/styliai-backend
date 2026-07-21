@@ -3,10 +3,11 @@ const router = express.Router();
 
 const creditPackController = require("../controllers/creditPackController");
 const adminAuthMiddleware = require("../middleware/adminAuthMiddleware");
+const { publicReadLimiter, adminActionLimiter } = require("../middleware/rateLimiters");
 
-router.get("/", creditPackController.getCreditPacks);
-router.post("/", adminAuthMiddleware, creditPackController.createCreditPack);
-router.put("/:id", adminAuthMiddleware, creditPackController.updateCreditPack);
-router.delete("/:id", adminAuthMiddleware, creditPackController.deleteCreditPack);
+router.get("/", publicReadLimiter, creditPackController.getCreditPacks);
+router.post("/", adminActionLimiter, adminAuthMiddleware, creditPackController.createCreditPack);
+router.put("/:id", adminActionLimiter, adminAuthMiddleware, creditPackController.updateCreditPack);
+router.delete("/:id", adminActionLimiter, adminAuthMiddleware, creditPackController.deleteCreditPack);
 
 module.exports = router;

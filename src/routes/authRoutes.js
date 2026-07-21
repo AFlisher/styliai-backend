@@ -1,34 +1,34 @@
 const express = require('express');
-const rateLimit = require('express-rate-limit');
 const authController = require('../controllers/authController');
+const authMiddleware = require('../middleware/authMiddleware');
+const {
+  loginLimiter,
+  registerLimiter,
+  forgotPasswordLimiter,
+  resetPasswordLimiter,
+  emailVerificationLimiter,
+  statusPollLimiter,
+  refreshLimiter,
+  googleSignInLimiter,
+  accountActionLimiter,
+} = require('../middleware/rateLimiters');
 
 const router = express.Router();
 
-// Rate limiting for auth routes to prevent brute-force attacks
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { message: "Too many authentication requests, please try again in 15 minutes." }
-});
+router.post('/register', registerLimiter, authController.register);
+router.get('/verify', emailVerificationLimiter, authController.verifyEmail);
+router.post('/login', loginLimiter, authController.login);
+router.post('/refresh', refreshLimiter, authController.refreshToken);
+router.post('/logout', accountActionLimiter, authMiddleware, authController.logout);
+router.post('/google', googleSignInLimiter, authController.googleSignIn);
+router.post('/change-password', accountActionLimiter, authMiddleware, authController.changePassword);
+router.post('/forgot-password', forgotPasswordLimiter, authController.forgotPassword);
+router.get('/status', statusPollLimiter, authController.checkVerificationStatus);
+router.post('/resend-verification', emailVerificationLimiter, authController.resendVerification);
 
-const authMiddleware = require('../middleware/authMiddleware');
+// Password reset routes (GET to display form, POST to submit new password) -
+// share resetPasswordLimiter's budget, see rateLimiters.js for why.
+router.get('/reset-password', resetPasswordLimiter, authController.renderResetPassword);
+router.post('/reset-password', resetPasswordLimiter, express.urlencoded({ extended: true }), authController.postResetPassword);
 
-router.post('/register', authLimiter, authController.register);
-router.get('/verify', authController.verifyEmail);
-router.post('/login', authLimiter, authController.login);
-router.post('/refresh', authLimiter, authController.refreshToken);
-router.post('/google', authLimiter, authController.googleSignIn);
-router.post('/change-password', authLimiter, authMiddleware, authController.changePassword);
-router.post('/forgot-password', authLimiter, authController.forgotPassword);
-router.get('/status', authLimiter, authController.checkVerificationStatus);
-router.post('/resend-verification', authLimiter, authController.resendVerification);
-
-// Password reset routes (GET to display form, POST to submit new password)
-router.get('/reset-password', authController.renderResetPassword);
-
-console.log("✅ authRoutes loaded");
-router.post('/reset-password', authLimiter, express.urlencoded({ extended: true }), authController.postResetPassword);
-console.log("✅ change-password route registered");
 module.exports = router;

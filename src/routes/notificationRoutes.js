@@ -3,7 +3,9 @@ const router = express.Router();
 
 const notificationController = require("../controllers/notificationController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { userDataLimiter } = require("../middleware/rateLimiters");
 
+router.use(userDataLimiter);
 router.use(authMiddleware);
 
 router.get("/", notificationController.getNotifications);

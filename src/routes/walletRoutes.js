@@ -6,20 +6,21 @@ const express = require("express");
 const router = express.Router();
 const walletController = require("../controllers/walletController");
 const authMiddleware = require("../middleware/authMiddleware");
+const { ssvCallbackLimiter, rewardClaimLimiter, userDataLimiter } = require("../middleware/rateLimiters");
 
 // POST /api/wallet/reward/verify (No auth required, called directly by Google AdMob callback)
-router.post("/reward/verify", walletController.verifyRewardedAd);
+router.post("/reward/verify", ssvCallbackLimiter, walletController.verifyRewardedAd);
 
 // All wallet endpoints below require JWT authentication
 router.use(authMiddleware);
 
 // GET /api/wallet
-router.get("/", walletController.getWalletInfo);
+router.get("/", userDataLimiter, walletController.getWalletInfo);
 
 // GET /api/wallet/history
-router.get("/history", walletController.getWalletHistory);
+router.get("/history", userDataLimiter, walletController.getWalletHistory);
 
 // POST /api/wallet/reward
-router.post("/reward", walletController.rewardAd);
+router.post("/reward", rewardClaimLimiter, walletController.rewardAd);
 
 module.exports = router;
