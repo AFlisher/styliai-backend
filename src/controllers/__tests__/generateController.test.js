@@ -14,11 +14,19 @@ jest.mock("../../models/styleModel", () => ({
 jest.mock("../../models/creationsModel", () => ({
   addCreation: jest.fn(),
 }));
+jest.mock("../../models/notificationModel", () => ({
+  createNotification: jest.fn(),
+}));
+jest.mock("../../models/generationEventsModel", () => ({
+  recordEvent: jest.fn(),
+}));
 
 const generationService = require("../../services/generation/generationService");
 const walletService = require("../../services/wallet/walletService");
 const styleModel = require("../../models/styleModel");
 const creationsModel = require("../../models/creationsModel");
+const notificationModel = require("../../models/notificationModel");
+const generationEventsModel = require("../../models/generationEventsModel");
 const { generateImage } = require("../generateController");
 
 function makeReqRes({ file = { buffer: Buffer.from("x") }, styleId = "style-1" } = {}) {
@@ -32,7 +40,7 @@ function makeReqRes({ file = { buffer: Buffer.from("x") }, styleId = "style-1" }
   return { req, res, next };
 }
 
-const ENABLED_STYLE = { id: "style-1", name: "Test Style", creditCost: 2, isEnabled: true };
+const ENABLED_STYLE = { id: "style-1", categoryId: "category-1", name: "Test Style", creditCost: 2, isEnabled: true };
 
 describe("generateController.generateImage", () => {
   beforeEach(() => {
@@ -45,6 +53,8 @@ describe("generateController.generateImage", () => {
       thumbnailUrl: "https://example.com/generated-thumb.webp",
     });
     creationsModel.addCreation.mockResolvedValue({ id: "creation-1" });
+    notificationModel.createNotification.mockResolvedValue({ id: "notification-1" });
+    generationEventsModel.recordEvent.mockResolvedValue({ id: "event-1" });
     jest.spyOn(console, "error").mockImplementation(() => {});
   });
 
@@ -62,6 +72,9 @@ describe("generateController.generateImage", () => {
       success: true,
       generatedImageUrl: "https://example.com/generated.png",
       thumbnailUrl: "https://example.com/generated-thumb.webp",
+      generationId: "creation-1",
+      categoryId: "category-1",
+      generationTimeMs: expect.any(Number),
     });
     expect(walletService.deductBalance).toHaveBeenCalledTimes(1);
     expect(walletService.deductBalance).toHaveBeenCalledWith("user-1", 2, "generation", "Image generated");
@@ -74,6 +87,12 @@ describe("generateController.generateImage", () => {
       styleName: "Test Style",
       imageUrl: "https://example.com/generated.png",
       thumbnailUrl: "https://example.com/generated-thumb.webp",
+    });
+    expect(generationEventsModel.recordEvent).toHaveBeenCalledWith({
+      userId: "user-1",
+      styleId: "style-1",
+      categoryId: "category-1",
+      generationTimeMs: expect.any(Number),
     });
   });
 
@@ -88,7 +107,20 @@ describe("generateController.generateImage", () => {
       success: true,
       generatedImageUrl: "https://example.com/generated.png",
       thumbnailUrl: "https://example.com/generated-thumb.webp",
+      generationId: null,
+      categoryId: "category-1",
+      generationTimeMs: expect.any(Number),
     });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("still returns 200 with the generated URL even if recording the analytics event fails", async () => {
+    generationEventsModel.recordEvent.mockRejectedValue(new Error("db hiccup"));
+    const { req, res, next } = makeReqRes();
+
+    await generateImage(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(200);
     expect(next).not.toHaveBeenCalled();
   });
 

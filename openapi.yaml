@@ -271,7 +271,138 @@ components:
         success: { type: boolean }
         generatedImageUrl: { type: string, format: uri }
         thumbnailUrl: { type: string, format: uri, nullable: true }
+        generationId:
+          type: string
+          format: uuid
+          nullable: true
+          description: "The creations row id for this generation, if the best-effort history write succeeded. Round-trip this back on POST /api/feedback."
+        categoryId:
+          type: string
+          format: uuid
+          nullable: true
+          description: The generated style's category id, for round-tripping on POST /api/feedback.
+        generationTimeMs:
+          type: integer
+          nullable: true
+          description: Server-side AI provider call duration, for round-tripping on POST /api/feedback.
       required: [success, generatedImageUrl, thumbnailUrl]
+
+    GenerationFeedbackSubmission:
+      type: object
+      description: Post-generation feedback. Never includes image data - only ids/metrics/text.
+      properties:
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        comment: { type: string, maxLength: 2000, nullable: true }
+        generationId: { type: string, format: uuid, nullable: true }
+        styleId: { type: string, format: uuid, nullable: true }
+        categoryId: { type: string, format: uuid, nullable: true }
+        generationTimeMs: { type: integer, nullable: true }
+        appVersion: { type: string, maxLength: 32, nullable: true }
+      required: [rating]
+
+    GenerationFeedbackResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+      required: [id, createdAt]
+
+    GenerationOverviewStats:
+      type: object
+      properties:
+        totalGenerations: { type: integer }
+        todayGenerations: { type: integer }
+        thisWeekGenerations: { type: integer }
+        thisMonthGenerations: { type: integer }
+        activeUsersToday: { type: integer }
+        activeUsersThisMonth: { type: integer }
+      required: [totalGenerations, todayGenerations, thisWeekGenerations, thisMonthGenerations, activeUsersToday, activeUsersThisMonth]
+
+    StyleUsageStat:
+      type: object
+      properties:
+        styleId: { type: string, format: uuid, nullable: true }
+        styleName: { type: string }
+        count: { type: integer }
+        percentage: { type: number }
+      required: [styleName, count, percentage]
+
+    CategoryUsageStat:
+      type: object
+      properties:
+        categoryId: { type: string, format: uuid, nullable: true }
+        categoryName: { type: string }
+        count: { type: integer }
+        percentage: { type: number }
+      required: [categoryName, count, percentage]
+
+    StyleRatingStat:
+      type: object
+      properties:
+        styleId: { type: string, format: uuid, nullable: true }
+        styleName: { type: string }
+        avgRating: { type: number }
+        feedbackCount: { type: integer }
+      required: [styleName, avgRating, feedbackCount]
+
+    StyleGenerationTimeStat:
+      type: object
+      nullable: true
+      properties:
+        styleId: { type: string, format: uuid, nullable: true }
+        styleName: { type: string }
+        avgMs: { type: integer }
+      required: [styleName, avgMs]
+
+    GenerationTimeStats:
+      type: object
+      properties:
+        avgMs: { type: integer, nullable: true }
+        sampleCount: { type: integer }
+        fastestStyle: { $ref: '#/components/schemas/StyleGenerationTimeStat' }
+        slowestStyle: { $ref: '#/components/schemas/StyleGenerationTimeStat' }
+      required: [avgMs, sampleCount, fastestStyle, slowestStyle]
+
+    FeedbackSummaryStats:
+      type: object
+      properties:
+        avgRating: { type: number, nullable: true }
+        totalFeedback: { type: integer }
+        distribution:
+          type: object
+          description: Count of feedback entries per star rating (keys "1".."5").
+          properties:
+            "5": { type: integer }
+            "4": { type: integer }
+            "3": { type: integer }
+            "2": { type: integer }
+            "1": { type: integer }
+      required: [avgRating, totalFeedback, distribution]
+
+    RecentFeedbackEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        userEmail: { type: string, format: email }
+        styleName: { type: string }
+        rating: { type: integer }
+        comment: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+      required: [id, userEmail, styleName, rating, comment, createdAt]
+
+    GenerationAnalyticsSummary:
+      type: object
+      properties:
+        range: { type: string, enum: [today, last7days, last30days, allTime] }
+        minFeedbackCount: { type: integer }
+        topStyles: { type: array, items: { $ref: '#/components/schemas/StyleUsageStat' } }
+        topCategories: { type: array, items: { $ref: '#/components/schemas/CategoryUsageStat' } }
+        highestRatedStyles: { type: array, items: { $ref: '#/components/schemas/StyleRatingStat' } }
+        lowestRatedStyles: { type: array, items: { $ref: '#/components/schemas/StyleRatingStat' } }
+        generationTime: { $ref: '#/components/schemas/GenerationTimeStats' }
+        feedbackSummary: { $ref: '#/components/schemas/FeedbackSummaryStats' }
+        recentFeedback: { type: array, items: { $ref: '#/components/schemas/RecentFeedbackEntry' } }
+      required: [range, minFeedbackCount, topStyles, topCategories, highestRatedStyles, lowestRatedStyles, generationTime, feedbackSummary, recentFeedback]
 
     AiGenerateResult:
       type: object
@@ -551,6 +682,34 @@ paths:
           schema: { type: string, enum: [today, last7days, last30days, allTime], default: allTime }
       responses:
         '200': { description: Country breakdown, content: { application/json: { schema: { $ref: '#/components/schemas/UsersByCountryStats' } } } }
+        '400': { description: Invalid range param, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '401': { description: Missing/invalid admin token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/admin/analytics/generation/overview:
+    get:
+      summary: Fixed-window generation overview counters (Total/Today/This Week/This Month generations, Active Users Today/This Month) for the dashboard's Generation Analytics page.
+      security: [{ adminBearerAuth: [] }]
+      responses:
+        '200': { description: Overview stats, content: { application/json: { schema: { $ref: '#/components/schemas/GenerationOverviewStats' } } } }
+        '401': { description: Missing/invalid admin token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/admin/analytics/generation/summary:
+    get:
+      summary: Range-filtered generation analytics (top styles/categories, highest/lowest rated styles, average generation time, feedback summary, recent feedback), all aggregated in SQL.
+      security: [{ adminBearerAuth: [] }]
+      parameters:
+        - name: range
+          in: query
+          required: false
+          description: Defaults to allTime. Filters on generation_events.created_at / generation_feedback.created_at.
+          schema: { type: string, enum: [today, last7days, last30days, allTime], default: allTime }
+        - name: minFeedbackCount
+          in: query
+          required: false
+          description: Minimum feedback count for a style to appear in highestRatedStyles/lowestRatedStyles. Defaults to 10.
+          schema: { type: integer, minimum: 1, default: 10 }
+      responses:
+        '200': { description: Generation analytics summary, content: { application/json: { schema: { $ref: '#/components/schemas/GenerationAnalyticsSummary' } } } }
         '400': { description: Invalid range param, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '401': { description: Missing/invalid admin token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
@@ -1063,6 +1222,20 @@ paths:
         '403': { description: Insufficient balance, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
         '404': { description: Style not found, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
         '503': { description: AI provider temporarily unavailable, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+
+  /api/feedback:
+    post:
+      summary: Submits post-generation feedback (star rating + optional comment). Never accepts image data.
+      security: [{ userBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GenerationFeedbackSubmission' }
+      responses:
+        '201': { description: Feedback recorded, content: { application/json: { schema: { $ref: '#/components/schemas/GenerationFeedbackResult' } } } }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
+        '401': { description: Missing/invalid user token, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorCode' } } } }
 
   /api/ai/generate:
     post:

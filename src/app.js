@@ -16,6 +16,7 @@ const creditPackRoutes = require("./routes/creditPackRoutes");
 const favoritesRoutes = require("./routes/favoritesRoutes");
 const creationsRoutes = require("./routes/creationsRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
+const generationFeedbackRoutes = require("./routes/generationFeedbackRoutes");
 
 const app = express();
 
@@ -140,6 +141,7 @@ app.use('/api/credit-packs', creditPackRoutes);
 app.use('/api/favorites', favoritesRoutes);
 app.use('/api/creations', creationsRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/feedback', generationFeedbackRoutes);
 
 // Default endpoint
 app.get('/', (req, res) => {

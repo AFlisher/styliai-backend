@@ -127,6 +127,20 @@ async function runMigration() {
       console.log("✅ Thumbnails migration completed successfully!");
     }
 
+    const generationEventsSqlPath = path.join(__dirname, '../../migration_generation_events.sql');
+    if (fs.existsSync(generationEventsSqlPath)) {
+      const generationEventsSql = fs.readFileSync(generationEventsSqlPath, 'utf8');
+      await client.query(generationEventsSql);
+      console.log("✅ Generation events migration completed successfully!");
+    }
+
+    const generationFeedbackSqlPath = path.join(__dirname, '../../migration_generation_feedback.sql');
+    if (fs.existsSync(generationFeedbackSqlPath)) {
+      const generationFeedbackSql = fs.readFileSync(generationFeedbackSqlPath, 'utf8');
+      await client.query(generationFeedbackSql);
+      console.log("✅ Generation feedback migration completed successfully!");
+    }
+
     console.log("✅ Database migration completed successfully!");
   } catch (err) {
     console.error("❌ Database migration failed:", err.message);

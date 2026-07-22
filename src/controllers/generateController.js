@@ -3,6 +3,7 @@ const walletService = require("../services/wallet/walletService");
 const styleModel = require("../models/styleModel");
 const creationsModel = require("../models/creationsModel");
 const notificationModel = require("../models/notificationModel");
+const generationEventsModel = require("../models/generationEventsModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
 const { buildFinalPrompt, PromptValidationError } = require("../utils/promptTemplate");
 
@@ -107,10 +108,13 @@ async function generateImage(req, res, next) {
     // 3. Invoke generation orchestration service (uploads image, calls AI)
     let generatedImageUrl;
     let generatedThumbnailUrl;
+    const generationStartedAt = Date.now();
+    let generationTimeMs;
     try {
       const result = await generationService.generate(files, styleId, finalPrompt);
       generatedImageUrl = result.imageUrl;
       generatedThumbnailUrl = result.thumbnailUrl;
+      generationTimeMs = Date.now() - generationStartedAt;
     } catch (genErr) {
       // Generation failed after the charge already succeeded - refund so the
       // user isn't charged for a failed generation. A refund failure is a
@@ -141,8 +145,9 @@ async function generateImage(req, res, next) {
     // 4. Record this in the user's creation history. Best-effort: the user
     // already paid credits and has a real generated image back, so a
     // history-write hiccup must never fail an otherwise-successful response.
+    let creation;
     try {
-      await creationsModel.addCreation({
+      creation = await creationsModel.addCreation({
         userId,
         styleId,
         styleName: style.name,
@@ -166,11 +171,32 @@ async function generateImage(req, res, next) {
       console.error("[generateImage] Failed to create notification:", notifErr.message);
     }
 
-    // 5. Return JSON payload
+    // Analytics event for the admin dashboard. Best-effort for the same
+    // reason as the creation record above - this must never fail an
+    // otherwise-successful, already-charged generation response. Never
+    // stores the generated or uploaded image, only ids/metrics.
+    try {
+      await generationEventsModel.recordEvent({
+        userId,
+        styleId,
+        categoryId: style.categoryId ?? null,
+        generationTimeMs,
+      });
+    } catch (eventErr) {
+      console.error("[generateImage] Failed to record analytics event:", eventErr.message);
+    }
+
+    // 5. Return JSON payload. generationId/categoryId/generationTimeMs are
+    // additive fields the client round-trips back on the post-generation
+    // feedback submission (POST /api/feedback) - existing clients that
+    // ignore them are unaffected.
     return res.status(200).json({
       success: true,
       generatedImageUrl,
       thumbnailUrl: generatedThumbnailUrl,
+      generationId: creation?.id ?? null,
+      categoryId: style.categoryId ?? null,
+      generationTimeMs,
     });
 
   } catch (err) {
