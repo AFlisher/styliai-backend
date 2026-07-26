@@ -7,6 +7,9 @@
 //  SEC-1.1 token-type discrimination: access tokens carry aud/type:'access',
 //      refresh tokens carry type:'refresh' and no aud; /refresh rejects an
 //      access token but keeps accepting legacy (pre-SEC-1.1) refresh tokens
+//  SEC-1.2 login timing equalization: non-existent and Google-only accounts
+//      burn a dummy bcrypt compare at the same cost as real user hashes so
+//      response timing can't enumerate registered emails
 
 process.env.GOOGLE_WEB_CLIENT_ID = "test-client-id";
 process.env.SUPABASE_JWT_SECRET = "test-supabase-secret";
@@ -129,6 +132,46 @@ describe("resendVerification (finding #6)", () => {
 
     const emailedToken = sendEmail.mock.calls[0][0].html.match(/verify\?token=([0-9a-f-]{36})/)[1];
     expect(sha256(emailedToken)).toBe(updateCall[1][0]);
+  });
+});
+
+describe("login timing equalization (SEC-1.2)", () => {
+  it("runs a dummy bcrypt compare at cost 10 for a non-existent email, then answers the generic 401", async () => {
+    const compareSpy = jest.spyOn(bcrypt, "compare");
+    try {
+      db.query.mockResolvedValueOnce({ rows: [] });
+      const res = makeRes();
+
+      await login({ body: { email: "nobody@example.com", password: "whatever" } }, res);
+
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+      // The dummy must carry the same cost factor (10) as the bcrypt.hash
+      // calls in this controller, or the timing gap reopens.
+      expect(compareSpy.mock.calls[0][1]).toMatch(/^\$2b\$10\$/);
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ message: "Invalid email or password." });
+    } finally {
+      compareSpy.mockRestore();
+    }
+  });
+
+  it("runs the same dummy bcrypt compare for a Google-only account (no password hash)", async () => {
+    const compareSpy = jest.spyOn(bcrypt, "compare");
+    try {
+      db.query.mockResolvedValueOnce({
+        rows: [{ id: "user-1", email: "g@example.com", full_name: "G", password_hash: null, email_verified: true }],
+      });
+      const res = makeRes();
+
+      await login({ body: { email: "g@example.com", password: "whatever" } }, res);
+
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+      expect(compareSpy.mock.calls[0][1]).toMatch(/^\$2b\$10\$/);
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ message: "Invalid email or password." });
+    } finally {
+      compareSpy.mockRestore();
+    }
   });
 });
 

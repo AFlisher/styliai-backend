@@ -9,6 +9,13 @@ const adminLoginSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
+// SEC-1.2/SEC-15.7: dummy hash compared against when the admin email is
+// unknown, so login timing can't be used to probe which emails are admin
+// accounts. Generated from 32 random bytes - no real password matches it -
+// and the cost (12) must stay equal to createAdmin.js's bcrypt.hash(..., 12)
+// (asserted in adminController.login.test.js).
+const DUMMY_ADMIN_PASSWORD_HASH = '$2b$12$X6koHogGAqEGpjfG.7XTxuBgjldtL/KM/gktOopwun.V5BACytfCe';
+
 async function login(req, res) {
   try {
     const parsed = adminLoginSchema.safeParse(req.body);
@@ -25,6 +32,9 @@ async function login(req, res) {
     );
 
     if (result.rows.length === 0) {
+      // SEC-1.2/SEC-15.7: burn the same bcrypt work as a real comparison
+      // before the generic 401, so a timing probe can't distinguish this path.
+      await bcrypt.compare(password, DUMMY_ADMIN_PASSWORD_HASH);
       return res.status(401).json({
         message: "Invalid email or password."
       });

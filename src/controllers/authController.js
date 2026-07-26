@@ -23,6 +23,14 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+// SEC-1.2: dummy hash compared against when a login hits a non-existent or
+// password-less (Google-only) account, so every login path performs the same
+// bcrypt work and response timing can't be used to enumerate registered
+// emails. Generated from 32 random bytes - no real password matches it - and
+// the cost (10) must stay equal to the bcrypt.hash(..., 10) calls below or
+// the timing gap reopens (asserted in authController.security.test.js).
+const DUMMY_PASSWORD_HASH = '$2b$10$IN2lBf2NrgPLnf6C3pXJeukistLDXcRLjHF6kDkXtB3vPDhqnGoDe';
+
 // Validation schemas using Zod
 const registerSchema = z.object({
   email: z.string().email("Invalid email format"),
@@ -250,14 +258,19 @@ async function login(req, res) {
     );
 
     if (userRes.rows.length === 0) {
+      // SEC-1.2: burn the same bcrypt work as a real comparison before the
+      // generic 401, so a timing probe can't distinguish this path.
+      await bcrypt.compare(validated.password, DUMMY_PASSWORD_HASH);
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
     const user = userRes.rows[0];
 
     // Google-only accounts have no password hash - reject with the same
-    // generic 401 instead of letting bcrypt.compare throw a 500.
+    // generic 401 instead of letting bcrypt.compare throw a 500, and with the
+    // same dummy bcrypt work so timing doesn't reveal the provider (SEC-1.2).
     if (!user.password_hash) {
+      await bcrypt.compare(validated.password, DUMMY_PASSWORD_HASH);
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
