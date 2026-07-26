@@ -39,7 +39,7 @@ const creditPackModel = require("../../src/models/creditPackModel");
 const recommendationService = require("../../src/services/recommendationService");
 
 const userToken = (id) =>
-  jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
+  jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 const adminToken = () =>
   jwt.sign({ sub: "admin-1", email: "a@x.com", role: "admin" }, process.env.ADMIN_JWT_SECRET, { expiresIn: "2h" });
 

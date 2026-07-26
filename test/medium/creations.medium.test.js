@@ -18,7 +18,7 @@ const request = require("supertest");
 const app = require("../../src/app");
 const creationsModel = require("../../src/models/creationsModel");
 
-const token = (id) => jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
+const token = (id) => jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 
 beforeEach(() => jest.clearAllMocks());
 

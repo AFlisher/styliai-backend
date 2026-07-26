@@ -51,12 +51,15 @@ function generateAccessToken(user) {
     throw new Error("SUPABASE_JWT_SECRET is not configured on the server.");
   }
   
-  // These claims match Supabase's authenticated user payload, enabling direct DB/Storage RLS
+  // These claims match Supabase's authenticated user payload, enabling direct
+  // DB/Storage RLS. The extra `type` claim (SEC-1.1) lets authMiddleware
+  // distinguish access from refresh tokens; Supabase ignores unknown claims.
   const payload = {
     sub: user.id,
     email: user.email,
     role: 'authenticated',
-    aud: 'authenticated'
+    aud: 'authenticated',
+    type: 'access'
   };
 
   return jwt.sign(payload, secret, { expiresIn: '1h' });
@@ -69,7 +72,10 @@ function generateRefreshToken(user) {
     throw new Error("SUPABASE_JWT_SECRET is not configured on the server.");
   }
 
-  const payload = { sub: user.id };
+  // No `aud` claim here - authMiddleware requires `aud: 'authenticated'`, so
+  // its absence is what keeps a refresh token unusable as an access token
+  // (SEC-1.1). The `type` claim makes the distinction explicit going forward.
+  const payload = { sub: user.id, type: 'refresh' };
   return jwt.sign(payload, secret, { expiresIn: '30d' });
 }
 
@@ -303,8 +309,16 @@ async function refreshToken(req, res) {
 
   try {
     const secret = process.env.SUPABASE_JWT_SECRET;
-    const decoded = jwt.verify(refreshToken, secret);
-    
+    const decoded = jwt.verify(refreshToken, secret, { algorithms: ['HS256'] });
+
+    // SEC-1.1: reject an access token presented as a refresh token (access
+    // tokens carry `aud`/`type:'access'`; refresh tokens never have `aud`).
+    // Legacy refresh tokens without a `type` claim stay accepted so sessions
+    // issued before this change survive the rollout.
+    if (decoded.aud !== undefined || decoded.type === 'access') {
+      return res.status(401).json({ message: "Invalid or expired refresh token." });
+    }
+
     const userRes = await db.query(
       'SELECT id, email, full_name, refresh_token_hash, created_at FROM public.users WHERE id = $1',
       [decoded.sub]

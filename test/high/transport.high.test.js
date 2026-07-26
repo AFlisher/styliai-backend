@@ -15,7 +15,7 @@ const app = require("../../src/app");
 const fakeDb = require("../critical/fakeDb");
 
 const userToken = (id) =>
-  jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
+  jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 
 beforeEach(() => fakeDb.reset());
 

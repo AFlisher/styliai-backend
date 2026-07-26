@@ -27,7 +27,7 @@ const PNG = Buffer.from(
 );
 
 const userToken = (id) =>
-  jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
+  jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 
 const ledgerFor = (id) => fakeDb.state.walletTransactions.filter((t) => t.userId === id);
 

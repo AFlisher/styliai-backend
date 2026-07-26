@@ -14,7 +14,7 @@ const app = require("../../src/app");
 const fakeDb = require("../critical/fakeDb");
 
 const userToken = (id) =>
-  jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
+  jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 
 beforeEach(() => fakeDb.reset());
 afterEach(() => {
@@ -105,7 +105,7 @@ describe("SEC-011 — JWT tampering is rejected on protected routes", () => {
 
   it("rejects an expired token", async () => {
     seed();
-    const expired = jwt.sign({ sub: "jt", role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: -10 });
+    const expired = jwt.sign({ sub: "jt", role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: -10 });
     const res = await request(app).get("/api/wallet").set("Authorization", `Bearer ${expired}`);
     expect(res.status).toBe(401);
   });

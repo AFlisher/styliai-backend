@@ -19,7 +19,21 @@ function authMiddleware(req, res, next) {
       throw new Error("SUPABASE_JWT_SECRET is not configured on the server.");
     }
 
-    const decoded = jwt.verify(token, secret);
+    // SEC-1.1: pin the algorithm and require the `aud` claim that only access
+    // tokens carry. Refresh tokens are signed with the same secret but never
+    // have an `aud`, so a 30-day refresh JWT presented as a Bearer token is
+    // rejected here instead of granting full API access and outliving logout.
+    const decoded = jwt.verify(token, secret, {
+      algorithms: ['HS256'],
+      audience: 'authenticated'
+    });
+
+    // Tokens issued after SEC-1.1 also carry an explicit `type` claim; reject
+    // anything that declares itself as something other than an access token.
+    if (decoded.type !== undefined && decoded.type !== 'access') {
+      return res.status(401).json({ message: "Invalid or expired access token." });
+    }
+
     // Supplying standard user payload
     req.user = {
       id: decoded.sub, // sub is user UUID in Supabase standard

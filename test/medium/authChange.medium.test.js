@@ -17,7 +17,7 @@ const fakeDb = require("../critical/fakeDb");
 
 const sha256 = (v) => crypto.createHash("sha256").update(v).digest("hex");
 const STRONG = "Str0ng!pass";
-const token = (id) => jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
+const token = (id) => jwt.sign({ sub: id, email: `${id}@x.com`, role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 
 beforeEach(() => fakeDb.reset());
 

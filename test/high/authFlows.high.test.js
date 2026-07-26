@@ -137,7 +137,7 @@ describe("SEC-006 — the password policy is enforced across every flow", () => 
   });
 
   it("change-password rejects a weak new password", async () => {
-    const token = jwt.sign({ sub: "cp1", email: "cp@example.com", role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
+    const token = jwt.sign({ sub: "cp1", email: "cp@example.com", role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
     const res = await request(app)
       .post("/api/auth/change-password")
       .set("Authorization", `Bearer ${token}`)

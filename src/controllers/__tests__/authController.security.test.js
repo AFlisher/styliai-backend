@@ -4,6 +4,9 @@
 //  #8  the shared password policy applies to register & change-password
 //  #11 Google-only accounts (NULL password_hash) get a clean 401 on login,
 //      and Google tokens without an email claim get a clean 401
+//  SEC-1.1 token-type discrimination: access tokens carry aud/type:'access',
+//      refresh tokens carry type:'refresh' and no aud; /refresh rejects an
+//      access token but keeps accepting legacy (pre-SEC-1.1) refresh tokens
 
 process.env.GOOGLE_WEB_CLIENT_ID = "test-client-id";
 process.env.SUPABASE_JWT_SECRET = "test-supabase-secret";
@@ -31,6 +34,7 @@ const {
   register,
   verifyEmail,
   login,
+  refreshToken,
   postResetPassword,
   changePassword,
   googleSignIn,
@@ -199,6 +203,62 @@ describe("changePassword (findings #2, #8)", () => {
     // this session, so this device stays logged in while others are revoked.
     expect(sha256(body.refreshToken)).toBe(updateCall[1][1]);
     expect(jwt.verify(body.refreshToken, process.env.SUPABASE_JWT_SECRET).sub).toBe("user-1");
+  });
+});
+
+describe("refreshToken endpoint (SEC-1.1)", () => {
+  const SECRET = process.env.SUPABASE_JWT_SECRET;
+
+  it("rejects an access token presented as a refresh token, before touching the DB", async () => {
+    const accessLike = jwt.sign(
+      { sub: "user-1", email: "u@example.com", role: "authenticated", aud: "authenticated", type: "access" },
+      SECRET,
+      { expiresIn: "1h" }
+    );
+    const res = makeRes();
+
+    await refreshToken({ body: { refreshToken: accessLike } }, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ message: "Invalid or expired refresh token." });
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a legacy refresh token (no type claim) whose hash matches the stored one", async () => {
+    const legacyRefresh = jwt.sign({ sub: "user-1" }, SECRET, { expiresIn: "30d" });
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "user-1", email: "u@example.com", full_name: "U", refresh_token_hash: sha256(legacyRefresh) }],
+      })
+      .mockResolvedValueOnce({ rows: [] }); // UPDATE rotated hash
+
+    const res = makeRes();
+    await refreshToken({ body: { refreshToken: legacyRefresh } }, res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    const body = res.json.mock.calls[0][0];
+    // The rotated pair must carry the SEC-1.1 discriminating claims: the
+    // access token keeps the Supabase claim shape plus type:'access', and the
+    // refresh token declares type:'refresh' with no aud claim.
+    const accessClaims = jwt.verify(body.accessToken, SECRET);
+    expect(accessClaims.aud).toBe("authenticated");
+    expect(accessClaims.type).toBe("access");
+    const refreshClaims = jwt.verify(body.refreshToken, SECRET);
+    expect(refreshClaims.type).toBe("refresh");
+    expect(refreshClaims.aud).toBeUndefined();
+  });
+
+  it("rejects a rotated-out refresh token whose hash no longer matches (revocation still works)", async () => {
+    const staleRefresh = jwt.sign({ sub: "user-1", type: "refresh" }, SECRET, { expiresIn: "30d" });
+    db.query.mockResolvedValueOnce({
+      rows: [{ id: "user-1", email: "u@example.com", full_name: "U", refresh_token_hash: sha256("a-different-token") }],
+    });
+
+    const res = makeRes();
+    await refreshToken({ body: { refreshToken: staleRefresh } }, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ message: "Invalid or expired refresh token." });
   });
 });
 

@@ -32,7 +32,7 @@ const adminToken = () =>
 // A legitimate mobile-user token: correctly signed, but with the Supabase
 // secret and role "authenticated" - must never satisfy the admin guard.
 const userToken = () =>
-  jwt.sign({ sub: "user-1", email: "u@x.com", role: "authenticated" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
+  jwt.sign({ sub: "user-1", email: "u@x.com", role: "authenticated", aud: "authenticated", type: "access" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "1h" });
 
 const WRITE_ENDPOINTS = [
   ["post", "/api/styles"],
