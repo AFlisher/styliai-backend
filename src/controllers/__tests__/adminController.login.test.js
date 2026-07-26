@@ -57,6 +57,64 @@ describe("admin login timing equalization (SEC-1.2/SEC-15.7)", () => {
   });
 });
 
+describe("admin login lockout (SEC-1.3/SEC-15.7)", () => {
+  it("rejects a locked admin with the generic 401 + cost-12 dummy compare, never evaluating the real hash", async () => {
+    const compareSpy = jest.spyOn(bcrypt, "compare");
+    try {
+      db.query.mockResolvedValueOnce({
+        rows: [{ id: "admin-1", email: "a@x.com", full_name: "Admin", password_hash: "$2b$12$realhash", is_locked: true }],
+      });
+      const res = makeRes();
+
+      await login({ body: { email: "a@x.com", password: "whatever" } }, res);
+
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+      expect(compareSpy.mock.calls[0][1]).toMatch(/^\$2b\$12\$/);
+      expect(compareSpy.mock.calls[0][1]).not.toBe("$2b$12$realhash");
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ message: "Invalid email or password." });
+      expect(db.query).toHaveBeenCalledTimes(1); // no counter update while locked
+    } finally {
+      compareSpy.mockRestore();
+    }
+  });
+
+  it("records a wrong password via the atomic CASE update and stays a generic 401", async () => {
+    const passwordHash = await bcrypt.hash("AdminPass1!", 4);
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "admin-1", email: "a@x.com", full_name: "Admin", password_hash: passwordHash, is_locked: false }],
+      })
+      .mockResolvedValueOnce({ rows: [{ failed_login_attempts: 1, locked_until: null }] });
+    const res = makeRes();
+
+    await login({ body: { email: "a@x.com", password: "wrong" } }, res);
+
+    const updateCall = db.query.mock.calls[1];
+    expect(updateCall[0]).toContain("UPDATE admins");
+    expect(updateCall[0]).toContain("failed_login_attempts = CASE");
+    expect(updateCall[1]).toEqual(["admin-1"]);
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it("restores the attempt budget on successful login", async () => {
+    const passwordHash = await bcrypt.hash("AdminPass1!", 4);
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "admin-1", email: "a@x.com", full_name: "Admin", password_hash: passwordHash, is_locked: false }],
+      })
+      .mockResolvedValueOnce({ rows: [] }); // reset UPDATE
+    const res = makeRes();
+
+    await login({ body: { email: "a@x.com", password: "AdminPass1!" } }, res);
+
+    const updateCall = db.query.mock.calls[1];
+    expect(updateCall[0]).toContain("failed_login_attempts = 0");
+    expect(updateCall[0]).toContain("locked_until = NULL");
+    expect(res.json.mock.calls[0][0].accessToken).toBeDefined();
+  });
+});
+
 describe("admin token lifetime (finding #5)", () => {
   async function loginAndDecode() {
     const passwordHash = await bcrypt.hash("AdminPass1!", 4);

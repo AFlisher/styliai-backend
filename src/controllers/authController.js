@@ -31,6 +31,38 @@ function hashToken(token) {
 // the timing gap reopens (asserted in authController.security.test.js).
 const DUMMY_PASSWORD_HASH = '$2b$10$IN2lBf2NrgPLnf6C3pXJeukistLDXcRLjHF6kDkXtB3vPDhqnGoDe';
 
+// SEC-1.3: per-account lockout bounds distributed brute-force that the
+// per-IP loginLimiter can't (rotating IPs get a fresh budget each; the
+// account itself previously had none). 5 consecutive failures lock the
+// account for 15 minutes; success or password reset clears the counter,
+// and an expired lock restores a fresh budget (handled atomically in the
+// failure UPDATE below). While locked, login answers the same generic 401
+// with the same dummy bcrypt work as every other rejection, so neither the
+// response nor its timing reveals the lock (or the account's existence).
+const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
+
+// Atomically increments the failure counter and derives the lock state in a
+// single statement: all CASE expressions evaluate against the pre-update row
+// under the row lock, and a blocked concurrent UPDATE re-evaluates against
+// the newly committed row (READ COMMITTED re-check), so concurrent failures
+// can never lose an increment or diverge counter and lock. An expired lock
+// resets the budget: that failure counts as 1 with the lock cleared.
+const RECORD_FAILED_LOGIN_SQL = `
+  UPDATE public.users
+  SET failed_login_attempts = CASE
+        WHEN locked_until IS NOT NULL AND locked_until <= now() THEN 1
+        ELSE failed_login_attempts + 1
+      END,
+      locked_until = CASE
+        WHEN locked_until IS NOT NULL AND locked_until <= now() THEN NULL
+        WHEN failed_login_attempts + 1 >= ${MAX_FAILED_LOGIN_ATTEMPTS}
+          THEN now() + interval '${LOCKOUT_MINUTES} minutes'
+        ELSE locked_until
+      END
+  WHERE id = $1
+  RETURNING failed_login_attempts, locked_until`;
+
 // Validation schemas using Zod
 const registerSchema = z.object({
   email: z.string().email("Invalid email format"),
@@ -252,8 +284,12 @@ async function login(req, res) {
   try {
     const validated = loginSchema.parse(req.body);
 
+    // is_locked is computed DB-side so it uses the same clock (now()) that
+    // wrote locked_until, keeping app/DB clock skew out of the decision.
     const userRes = await db.query(
-      'SELECT id, email, full_name, password_hash, email_verified, created_at FROM public.users WHERE email = $1',
+      `SELECT id, email, full_name, password_hash, email_verified, created_at,
+              (locked_until IS NOT NULL AND locked_until > now()) AS is_locked
+       FROM public.users WHERE email = $1`,
       [validated.email.toLowerCase()]
     );
 
@@ -266,6 +302,15 @@ async function login(req, res) {
 
     const user = userRes.rows[0];
 
+    // SEC-1.3: locked account. Same generic 401 and same dummy bcrypt work
+    // as every other rejection - the real hash is deliberately never
+    // evaluated while locked, and neither response nor timing reveals the
+    // lock. No counter update here: probes during a lock don't extend it.
+    if (user.is_locked) {
+      await bcrypt.compare(validated.password, DUMMY_PASSWORD_HASH);
+      return res.status(401).json({ message: "Invalid email or password." });
+    }
+
     // Google-only accounts have no password hash - reject with the same
     // generic 401 instead of letting bcrypt.compare throw a 500, and with the
     // same dummy bcrypt work so timing doesn't reveal the provider (SEC-1.2).
@@ -277,6 +322,14 @@ async function login(req, res) {
     // Compare passwords
     const match = await bcrypt.compare(validated.password, user.password_hash);
     if (!match) {
+      // SEC-1.3: count the failure and lock the account at the threshold.
+      const failRes = await db.query(RECORD_FAILED_LOGIN_SQL, [user.id]);
+      const updated = failRes.rows[0];
+      if (updated && updated.failed_login_attempts === MAX_FAILED_LOGIN_ATTEMPTS && updated.locked_until) {
+        // Alerting placeholder until security-event logging (SEC-16.3)
+        // exists. User id only - no email/PII in logs (Section 16).
+        console.warn(`[security] account locked for ${LOCKOUT_MINUTES}m after ${MAX_FAILED_LOGIN_ATTEMPTS} failed logins: user ${user.id}`);
+      }
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
@@ -289,9 +342,13 @@ async function login(req, res) {
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    // Save refresh token hash in DB
+    // Save refresh token hash in DB; a successful login also restores the
+    // full failed-attempt budget (SEC-1.3) in the same statement.
     const hashedRefresh = hashToken(refreshToken);
-    await db.query('UPDATE public.users SET refresh_token_hash = $1 WHERE id = $2', [hashedRefresh, user.id]);
+    await db.query(
+      'UPDATE public.users SET refresh_token_hash = $1, failed_login_attempts = 0, locked_until = NULL WHERE id = $2',
+      [hashedRefresh, user.id]
+    );
 
     res.json({
       accessToken,
@@ -489,10 +546,12 @@ async function postResetPassword(req, res) {
 
     // Hash new password, clear the reset token, and revoke the refresh token
     // so any session an attacker may already hold dies with the old password
-    // (complexity rules are enforced by resetPasswordSchema above).
+    // (complexity rules are enforced by resetPasswordSchema above). Password
+    // reset is the account-recovery path, so it also clears any login
+    // lockout (SEC-1.3) - a locked-out owner regains access immediately.
     const newPasswordHash = await bcrypt.hash(validated.password, 10);
     await db.query(
-      'UPDATE public.users SET password_hash = $1, reset_token_hash = NULL, reset_token_expires_at = NULL, refresh_token_hash = NULL WHERE id = $2',
+      'UPDATE public.users SET password_hash = $1, reset_token_hash = NULL, reset_token_expires_at = NULL, refresh_token_hash = NULL, failed_login_attempts = 0, locked_until = NULL WHERE id = $2',
       [newPasswordHash, user.id]
     );
 

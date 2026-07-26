@@ -41,6 +41,8 @@ function seedAdmin(a) {
     email: a.email,
     full_name: a.fullName || a.full_name || "Test Admin",
     password_hash: a.password_hash,
+    failed_login_attempts: 0,
+    locked_until: null,
     ...a,
   };
   state.admins.push(admin);
@@ -59,12 +61,36 @@ function seedUser(u) {
     verification_token_hash: null,
     reset_token_hash: null,
     reset_token_expires_at: null,
+    failed_login_attempts: 0,
+    locked_until: null,
     created_at: new Date().toISOString(),
     full_name: "Test User",
     ...u,
   };
   state.users.push(user);
   return user;
+}
+
+// Mirrors the SEC-1.3 lockout SQL semantics: the login SELECTs project a
+// DB-computed is_locked, and the atomic failure UPDATE increments the
+// counter, locks at the threshold, and grants a fresh budget (count = 1,
+// lock cleared) when an expired lock is hit. Constants must match the
+// controllers (5 attempts / 15 minutes).
+function isLocked(row) {
+  return row.locked_until != null && new Date(row.locked_until) > new Date();
+}
+
+function applyFailedLogin(row) {
+  if (row.locked_until != null && new Date(row.locked_until) <= new Date()) {
+    row.failed_login_attempts = 1;
+    row.locked_until = null;
+  } else {
+    row.failed_login_attempts = (row.failed_login_attempts || 0) + 1;
+    if (row.failed_login_attempts >= 5) {
+      row.locked_until = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    }
+  }
+  return { rows: [{ failed_login_attempts: row.failed_login_attempts, locked_until: row.locked_until }], rowCount: 1 };
 }
 
 function seedWalletTx(userId, { amount, type, description = "", createdAt }) {
@@ -237,7 +263,22 @@ async function query(text, params = []) {
   // ---- admins (admin login) ----
   if (q.startsWith("SELECT") && q.includes("FROM admins")) {
     const admin = state.admins.find((a) => a.email === params[0]);
-    return { rows: admin ? [admin] : [], rowCount: admin ? 1 : 0 };
+    if (!admin) return { rows: [], rowCount: 0 };
+    const row = q.includes("is_locked") ? { ...admin, is_locked: isLocked(admin) } : admin;
+    return { rows: [row], rowCount: 1 };
+  }
+  if (q.startsWith("UPDATE admins")) {
+    const admin = state.admins.find((a) => a.id === last);
+    if (!admin) return { rows: [], rowCount: 0 };
+    if (q.includes("failed_login_attempts = CASE")) {
+      return applyFailedLogin(admin); // SEC-1.3 failure increment
+    }
+    if (q.includes("failed_login_attempts = 0")) {
+      admin.failed_login_attempts = 0; // SEC-1.3 reset on successful login
+      admin.locked_until = null;
+      return { rows: [], rowCount: 1 };
+    }
+    throw new Error(`fakeDb: unhandled admins UPDATE -> ${q}`);
   }
 
   // ---- users: INSERT ----
@@ -288,13 +329,18 @@ async function query(text, params = []) {
     else if (q.includes("WHERE reset_token_hash = $1")) user = findUserBy((u) => u.reset_token_hash === params[0]);
     else if (q.includes("WHERE google_id = $1")) user = findUserBy((u) => u.google_id === params[0]);
     else if (q.includes("WHERE id = $1")) user = findUserBy((u) => u.id === params[0]);
-    return { rows: user ? [user] : [], rowCount: user ? 1 : 0 };
+    if (!user) return { rows: [], rowCount: 0 };
+    const row = q.includes("is_locked") ? { ...user, is_locked: isLocked(user) } : user;
+    return { rows: [row], rowCount: 1 };
   }
 
   // ---- users: UPDATE ----
   if (q.includes("UPDATE public.users")) {
     const user = findUserBy((u) => u.id === last);
     if (!user) return { rows: [], rowCount: 0 };
+    if (q.includes("failed_login_attempts = CASE")) {
+      return applyFailedLogin(user); // SEC-1.3 failure increment
+    }
     if (q.includes("google_id = $1")) {
       // Link an existing email account to Google.
       user.google_id = params[0];
@@ -312,6 +358,8 @@ async function query(text, params = []) {
       user.reset_token_hash = null;
       user.reset_token_expires_at = null;
       user.refresh_token_hash = null; // revocation on reset
+      user.failed_login_attempts = 0; // lockout cleared on reset (SEC-1.3)
+      user.locked_until = null;
     } else if (q.includes("password_hash = $1, refresh_token_hash = $2")) {
       user.password_hash = params[0];
       user.refresh_token_hash = params[1]; // rotation on change-password
@@ -321,6 +369,10 @@ async function query(text, params = []) {
       user.refresh_token_hash = null; // logout revocation
     } else if (q.includes("refresh_token_hash = $1")) {
       user.refresh_token_hash = params[0];
+      if (q.includes("failed_login_attempts = 0")) {
+        user.failed_login_attempts = 0; // budget restored on successful login (SEC-1.3)
+        user.locked_until = null;
+      }
     }
     return { rows: [], rowCount: 1 };
   }

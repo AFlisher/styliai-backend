@@ -10,6 +10,10 @@
 //  SEC-1.2 login timing equalization: non-existent and Google-only accounts
 //      burn a dummy bcrypt compare at the same cost as real user hashes so
 //      response timing can't enumerate registered emails
+//  SEC-1.3 per-account lockout: failed logins are counted atomically, the
+//      account locks at the threshold, a locked account answers the same
+//      dummy-compare 401 as every other rejection, and success/reset/expiry
+//      restore the attempt budget
 
 process.env.GOOGLE_WEB_CLIENT_ID = "test-client-id";
 process.env.SUPABASE_JWT_SECRET = "test-supabase-secret";
@@ -172,6 +176,109 @@ describe("login timing equalization (SEC-1.2)", () => {
     } finally {
       compareSpy.mockRestore();
     }
+  });
+});
+
+describe("login lockout (SEC-1.3)", () => {
+  it("rejects a locked account with the generic 401 + dummy compare, without touching the counter or the real hash", async () => {
+    const compareSpy = jest.spyOn(bcrypt, "compare");
+    try {
+      db.query.mockResolvedValueOnce({
+        rows: [{ id: "user-1", email: "u@example.com", full_name: "U", password_hash: "$2b$10$realhash", email_verified: true, is_locked: true }],
+      });
+      const res = makeRes();
+
+      await login({ body: { email: "u@example.com", password: "whatever" } }, res);
+
+      // Only the dummy is ever compared while locked - never the real hash.
+      expect(compareSpy).toHaveBeenCalledTimes(1);
+      expect(compareSpy.mock.calls[0][1]).toMatch(/^\$2b\$10\$/);
+      expect(compareSpy.mock.calls[0][1]).not.toBe("$2b$10$realhash");
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ message: "Invalid email or password." });
+      // No failure UPDATE: probes during a lock don't extend it.
+      expect(db.query).toHaveBeenCalledTimes(1);
+    } finally {
+      compareSpy.mockRestore();
+    }
+  });
+
+  it("records a wrong password via the single atomic CASE update", async () => {
+    const realHash = await bcrypt.hash("Right1!pass", 4);
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "user-1", email: "u@example.com", full_name: "U", password_hash: realHash, email_verified: true, is_locked: false }],
+      })
+      .mockResolvedValueOnce({ rows: [{ failed_login_attempts: 1, locked_until: null }] });
+    const res = makeRes();
+
+    await login({ body: { email: "u@example.com", password: "Wr0ng!pass" } }, res);
+
+    const updateCall = db.query.mock.calls[1];
+    expect(updateCall[0]).toContain("failed_login_attempts = CASE");
+    expect(updateCall[0]).toContain("RETURNING failed_login_attempts, locked_until");
+    expect(updateCall[1]).toEqual(["user-1"]);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ message: "Invalid email or password." });
+  });
+
+  it("warns (id only, no email) when the failure threshold locks the account", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const realHash = await bcrypt.hash("Right1!pass", 4);
+      db.query
+        .mockResolvedValueOnce({
+          rows: [{ id: "user-1", email: "u@example.com", full_name: "U", password_hash: realHash, email_verified: true, is_locked: false }],
+        })
+        .mockResolvedValueOnce({
+          rows: [{ failed_login_attempts: 5, locked_until: new Date(Date.now() + 15 * 60 * 1000).toISOString() }],
+        });
+      const res = makeRes();
+
+      await login({ body: { email: "u@example.com", password: "Wr0ng!pass" } }, res);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain("user-1");
+      expect(warnSpy.mock.calls[0][0]).not.toContain("u@example.com");
+      expect(res.status).toHaveBeenCalledWith(401);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("restores the attempt budget in the same UPDATE that stores the refresh hash on success", async () => {
+    const realHash = await bcrypt.hash("Right1!pass", 4);
+    db.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "user-1", email: "u@example.com", full_name: "U", password_hash: realHash, email_verified: true, is_locked: false }],
+      })
+      .mockResolvedValueOnce({ rows: [] }); // refresh-hash UPDATE
+    const res = makeRes();
+
+    await login({ body: { email: "u@example.com", password: "Right1!pass" } }, res);
+
+    const updateCall = db.query.mock.calls[1];
+    expect(updateCall[0]).toContain("refresh_token_hash = $1");
+    expect(updateCall[0]).toContain("failed_login_attempts = 0");
+    expect(updateCall[0]).toContain("locked_until = NULL");
+    expect(res.json.mock.calls[0][0].accessToken).toBeDefined();
+  });
+
+  it("clears the lockout in the password-reset UPDATE (recovery path unlocks)", async () => {
+    const future = new Date(Date.now() + 3600 * 1000).toISOString();
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: "user-1", reset_token_expires_at: future }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const res = makeRes();
+    await postResetPassword(
+      { body: { token: "11111111-2222-4333-8444-555555555555", password: STRONG_PASSWORD } },
+      res
+    );
+
+    const updateCall = db.query.mock.calls[1];
+    expect(updateCall[0]).toContain("failed_login_attempts = 0");
+    expect(updateCall[0]).toContain("locked_until = NULL");
   });
 });
 

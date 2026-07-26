@@ -16,6 +16,27 @@ const adminLoginSchema = z.object({
 // (asserted in adminController.login.test.js).
 const DUMMY_ADMIN_PASSWORD_HASH = '$2b$12$X6koHogGAqEGpjfG.7XTxuBgjldtL/KM/gktOopwun.V5BACytfCe';
 
+// SEC-1.3 (the lockout half of SEC-15.7): per-account lockout for admin
+// login, same mechanism and constants as the user path in authController -
+// see the comments there for the atomicity and disclosure reasoning.
+const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 15;
+
+const RECORD_FAILED_ADMIN_LOGIN_SQL = `
+  UPDATE admins
+  SET failed_login_attempts = CASE
+        WHEN locked_until IS NOT NULL AND locked_until <= now() THEN 1
+        ELSE failed_login_attempts + 1
+      END,
+      locked_until = CASE
+        WHEN locked_until IS NOT NULL AND locked_until <= now() THEN NULL
+        WHEN failed_login_attempts + 1 >= ${MAX_FAILED_LOGIN_ATTEMPTS}
+          THEN now() + interval '${LOCKOUT_MINUTES} minutes'
+        ELSE locked_until
+      END
+  WHERE id = $1
+  RETURNING failed_login_attempts, locked_until`;
+
 async function login(req, res) {
   try {
     const parsed = adminLoginSchema.safeParse(req.body);
@@ -25,7 +46,8 @@ async function login(req, res) {
     const { email, password } = parsed.data;
 
     const result = await db.query(
-      `SELECT id, email, full_name, password_hash
+      `SELECT id, email, full_name, password_hash,
+              (locked_until IS NOT NULL AND locked_until > now()) AS is_locked
        FROM admins
        WHERE email = $1`,
       [email.toLowerCase()]
@@ -42,16 +64,38 @@ async function login(req, res) {
 
     const admin = result.rows[0];
 
+    // SEC-1.3: locked admin account - same generic 401 and dummy bcrypt work
+    // as the unknown-email path; the real hash is never evaluated while
+    // locked, and neither response nor timing reveals the lock.
+    if (admin.is_locked) {
+      await bcrypt.compare(password, DUMMY_ADMIN_PASSWORD_HASH);
+      return res.status(401).json({
+        message: "Invalid email or password."
+      });
+    }
+
     const valid = await bcrypt.compare(
       password,
       admin.password_hash
     );
 
     if (!valid) {
+      // SEC-1.3: count the failure and lock the account at the threshold.
+      const failRes = await db.query(RECORD_FAILED_ADMIN_LOGIN_SQL, [admin.id]);
+      const updated = failRes.rows[0];
+      if (updated && updated.failed_login_attempts === MAX_FAILED_LOGIN_ATTEMPTS && updated.locked_until) {
+        console.warn(`[security] admin account locked for ${LOCKOUT_MINUTES}m after ${MAX_FAILED_LOGIN_ATTEMPTS} failed logins: admin ${admin.id}`);
+      }
       return res.status(401).json({
         message: "Invalid email or password."
       });
     }
+
+    // Successful login restores the full failed-attempt budget (SEC-1.3).
+    await db.query(
+      'UPDATE admins SET failed_login_attempts = 0, locked_until = NULL WHERE id = $1',
+      [admin.id]
+    );
 
     const accessToken = jwt.sign(
       {
