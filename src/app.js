@@ -3,6 +3,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 
+const { redactUrl } = require('./utils/redactUrl');
+
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const categoryRoutes = require("./routes/categoryRoutes");
@@ -123,6 +125,14 @@ app.use(cors({
   },
   credentials: true,
 }));
+
+// SEC-16.1: override morgan's built-in `url` token so credential-bearing query
+// parameters are redacted before anything is written. Overriding the built-in
+// rather than adding a `:safe-url` token to a hand-rolled format string means
+// redaction is the default for *every* morgan format - so switching this
+// logger to `combined` or a structured format later (SEC-16.4) cannot silently
+// reintroduce the leak.
+morgan.token("url", (req) => redactUrl(req.originalUrl || req.url));
 
 app.use(morgan("dev"));
 app.use(express.json());
