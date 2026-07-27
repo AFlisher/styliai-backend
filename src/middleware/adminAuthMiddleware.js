@@ -19,7 +19,11 @@ function adminAuthMiddleware(req, res, next) {
       throw new Error("ADMIN_JWT_SECRET is not configured on the server.");
     }
 
-    const decoded = jwt.verify(token, secret);
+    // SEC-1.7: pin the algorithm. Without this, jsonwebtoken widens the
+    // accepted set to the whole HMAC family whenever the key resolves to a
+    // secret - a set inherited from the dependency's defaults rather than
+    // stated here. Admin tokens are signed HS256, so HS256 is all we accept.
+    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] });
 
     if (decoded.role !== 'admin') {
       return res.status(403).json({ message: "Admin privileges required." });
@@ -65,7 +69,9 @@ function optionalAdminAuth(req, res, next) {
       return next();
     }
 
-    const decoded = jwt.verify(token, secret);
+    // SEC-1.7: pinned identically to the strict middleware above - the two
+    // paths must not disagree about what constitutes a valid admin token.
+    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] });
 
     if (decoded.role === 'admin') {
       req.admin = {

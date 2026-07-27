@@ -105,6 +105,10 @@ async function login(req, res) {
       },
       process.env.ADMIN_JWT_SECRET,
       {
+        // SEC-1.7: state the algorithm rather than relying on jwt.sign's
+        // default, so the signer and adminAuthMiddleware's pinned verifier
+        // can't drift apart if that default ever changes.
+        algorithm: "HS256",
         // Short-lived by default: the token lives in the dashboard's
         // localStorage with no server-side revocation, so its lifetime is
         // the whole exposure window if it's ever exfiltrated.
