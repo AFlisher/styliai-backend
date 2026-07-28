@@ -75,6 +75,23 @@ describe("adminAuthMiddleware.optionalAdminAuth", () => {
     expect(req.admin).toEqual({ id: "admin-1", email: "admin@example.com", role: "admin" });
   });
 
+  it("carries the SEC-15.4 adminRole claim through to req.admin", () => {
+    // The link between authentication and authorization: requireAdminRole
+    // reads req.admin.adminRole, so if this claim were dropped here every
+    // guarded route would fail closed. Asserted explicitly because toEqual
+    // treats an absent property and an undefined one as equal, so the test
+    // above would pass either way.
+    const token = jwt.sign(
+      { sub: "admin-1", email: "admin@example.com", role: "admin", adminRole: "editor" },
+      TEST_SECRET
+    );
+    const { req, res, next } = makeReqRes(`Bearer ${token}`);
+
+    optionalAdminAuth(req, res, next);
+
+    expect(req.admin.adminRole).toBe("editor");
+  });
+
   it("never rejects the request (no res.status/res.json call in any case)", () => {
     for (const header of [undefined, "Bearer bad", "Bearer garbage.invalid.token"]) {
       const { req, res, next } = makeReqRes(header);

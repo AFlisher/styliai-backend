@@ -27,7 +27,7 @@ const request = require("supertest");
 const app = require("../../src/app");
 
 const adminToken = () =>
-  jwt.sign({ sub: "admin-1", email: "a@x.com", role: "admin" }, process.env.ADMIN_JWT_SECRET, { expiresIn: "2h" });
+  jwt.sign({ sub: "admin-1", email: "a@x.com", role: "admin", adminRole: "superadmin" }, process.env.ADMIN_JWT_SECRET, { expiresIn: "2h" });
 
 // A legitimate mobile-user token: correctly signed, but with the Supabase
 // secret and role "authenticated" - must never satisfy the admin guard.

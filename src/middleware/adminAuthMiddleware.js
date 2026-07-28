@@ -32,7 +32,12 @@ function adminAuthMiddleware(req, res, next) {
     req.admin = {
       id: decoded.sub,
       email: decoded.email,
-      role: decoded.role
+      role: decoded.role,
+      // SEC-15.4: the authorization tier, read by requireAdminRole. Carried
+      // through as-is, including `undefined` for tokens minted before roles
+      // existed - roleSatisfies fails closed on anything it doesn't recognise,
+      // so an absent claim denies rather than grandfathering full privilege.
+      adminRole: decoded.adminRole
     };
 
     next();
@@ -77,7 +82,13 @@ function optionalAdminAuth(req, res, next) {
       req.admin = {
         id: decoded.sub,
         email: decoded.email,
-        role: decoded.role
+        role: decoded.role,
+        // SEC-15.4: carried here too. No route currently pairs
+        // optionalAdminAuth with a role guard, but the two paths must not
+        // disagree about what a req.admin contains - if they did, adding a
+        // guard to one of these shared endpoints later would fail closed for
+        // reasons nobody would think to look for here.
+        adminRole: decoded.adminRole
       };
     }
 

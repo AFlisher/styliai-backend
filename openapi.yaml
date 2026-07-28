@@ -68,8 +68,17 @@ components:
         id: { type: string, format: uuid }
         email: { type: string, format: email }
         fullName: { type: string }
+        # Authentication marker only - "this is an admin". Unchanged by
+        # SEC-15.4, which deliberately kept authorization in a separate field.
         role: { type: string, enum: [admin] }
-      required: [id, email, fullName, role]
+        adminRole:
+          type: string
+          enum: [viewer, editor, superadmin]
+          description: >
+            SEC-15.4 authorization tier. Returned so the dashboard can hide tabs
+            the role cannot use; it is presentational only, since every request
+            is re-authorized server-side from the equivalent JWT claim.
+      required: [id, email, fullName, role, adminRole]
 
     AdminAuthResponse:
       type: object

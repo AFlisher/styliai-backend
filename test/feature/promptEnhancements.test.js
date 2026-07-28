@@ -62,7 +62,7 @@ const request = require("supertest");
 const app = require("../../src/app");
 const styleModel = require("../../src/models/styleModel");
 
-const adminToken = () => jwt.sign({ sub: "admin-1", email: "a@x.com", role: "admin" }, process.env.ADMIN_JWT_SECRET, { expiresIn: "2h" });
+const adminToken = () => jwt.sign({ sub: "admin-1", email: "a@x.com", role: "admin", adminRole: "superadmin" }, process.env.ADMIN_JWT_SECRET, { expiresIn: "2h" });
 
 beforeEach(() => jest.clearAllMocks());
 

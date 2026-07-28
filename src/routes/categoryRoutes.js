@@ -4,6 +4,7 @@ const router = express.Router();
 const categoryController = require("../controllers/categoryController");
 const adminAuthMiddleware = require("../middleware/adminAuthMiddleware");
 const { optionalAdminAuth } = require("../middleware/adminAuthMiddleware");
+const { requireAdminRoleFor } = require("../middleware/requireAdminRole");
 const authMiddleware = require("../middleware/authMiddleware");
 const { publicReadLimiter, adminActionLimiter } = require("../middleware/rateLimiters");
 
@@ -15,11 +16,12 @@ const { publicReadLimiter, adminActionLimiter } = require("../middleware/rateLim
 // GET /api/styles.
 router.get("/", publicReadLimiter, optionalAdminAuth, authMiddleware.requireUserOrAdmin, categoryController.getCategories);
 
-router.post("/", adminActionLimiter, adminAuthMiddleware, categoryController.createCategory);
+// SEC-15.4: tiers come from src/config/adminRoutePolicy.js, not from here.
+router.post("/", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/categories"), categoryController.createCategory);
 
-router.put("/reorder", adminActionLimiter, adminAuthMiddleware, categoryController.reorderCategories);
+router.put("/reorder", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("PUT /api/categories/reorder"), categoryController.reorderCategories);
 
-router.put("/:id", adminActionLimiter, adminAuthMiddleware, categoryController.updateCategory);
+router.put("/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("PUT /api/categories/:id"), categoryController.updateCategory);
 
-router.delete("/:id", adminActionLimiter, adminAuthMiddleware, categoryController.deleteCategory);
+router.delete("/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("DELETE /api/categories/:id"), categoryController.deleteCategory);
 module.exports = router;

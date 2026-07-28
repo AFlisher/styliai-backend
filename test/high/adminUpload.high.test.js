@@ -27,7 +27,7 @@ const PNG = Buffer.from(
 );
 
 const adminToken = () =>
-  jwt.sign({ sub: "admin-1", email: "a@x.com", role: "admin" }, process.env.ADMIN_JWT_SECRET, { expiresIn: "2h" });
+  jwt.sign({ sub: "admin-1", email: "a@x.com", role: "admin", adminRole: "superadmin" }, process.env.ADMIN_JWT_SECRET, { expiresIn: "2h" });
 
 beforeEach(() => imageStorageService.uploadOriginalWithThumbnail.mockClear());
 

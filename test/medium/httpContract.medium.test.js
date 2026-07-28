@@ -48,7 +48,14 @@ describe("SEC-013 — admin token lifetime is enforced", () => {
     // Guard-level check only: a valid, unexpired admin token must NOT be
     // rejected as unauthorized (401/403). Downstream data loading is covered
     // in adminStats.medium.test.js.
-    const valid = jwt.sign({ sub: "a", role: "admin" }, process.env.ADMIN_JWT_SECRET, { expiresIn: "2h" });
+    // SEC-15.4: carries a tier as well, since authorization now fails closed on
+    // a token without one. `viewer` is enough for this read, and keeps the test
+    // about token lifetime rather than about privilege.
+    const valid = jwt.sign(
+      { sub: "a", role: "admin", adminRole: "viewer" },
+      process.env.ADMIN_JWT_SECRET,
+      { expiresIn: "2h" }
+    );
     const res = await request(app).get("/api/admin/stats").set("Authorization", `Bearer ${valid}`);
     expect([401, 403]).not.toContain(res.status);
   });

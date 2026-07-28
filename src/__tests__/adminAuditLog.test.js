@@ -25,10 +25,13 @@ const ADMIN = { id: "11111111-1111-1111-1111-111111111111", email: "admin@exampl
 const TARGET_USER = "22222222-2222-2222-2222-222222222222";
 
 function adminToken() {
-  return jwt.sign({ sub: ADMIN.id, email: ADMIN.email, role: "admin" }, process.env.ADMIN_JWT_SECRET, {
-    algorithm: "HS256",
-    expiresIn: "5m",
-  });
+  // SEC-15.4: superadmin, so this suite keeps exercising the full admin surface
+  // it was written for - authorization now fails closed on a token with no tier.
+  return jwt.sign(
+    { sub: ADMIN.id, email: ADMIN.email, role: "admin", adminRole: "superadmin" },
+    process.env.ADMIN_JWT_SECRET,
+    { algorithm: "HS256", expiresIn: "5m" }
+  );
 }
 
 /**

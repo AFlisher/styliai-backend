@@ -3,6 +3,7 @@ const router = express.Router();
 
 const tagController = require("../controllers/tagController");
 const adminAuthMiddleware = require("../middleware/adminAuthMiddleware");
+const { requireAdminRoleFor } = require("../middleware/requireAdminRole");
 const { adminActionLimiter } = require("../middleware/rateLimiters");
 
 // Tags are internal ranking metadata curated by the Admin Dashboard only -
@@ -11,9 +12,12 @@ const { adminActionLimiter } = require("../middleware/rateLimiters");
 router.use(adminActionLimiter);
 router.use(adminAuthMiddleware);
 
-router.get("/", tagController.getTags);
-router.post("/", tagController.createTag);
-router.put("/:id", tagController.updateTag);
-router.delete("/:id", tagController.deleteTag);
+// SEC-15.4: the router-level guard above establishes "is an admin"; these add
+// the per-route tier. The read gets its own entry because, unlike the other
+// catalog reads, this whole router is admin-only - there is no public variant.
+router.get("/", requireAdminRoleFor("GET /api/tags"), tagController.getTags);
+router.post("/", requireAdminRoleFor("POST /api/tags"), tagController.createTag);
+router.put("/:id", requireAdminRoleFor("PUT /api/tags/:id"), tagController.updateTag);
+router.delete("/:id", requireAdminRoleFor("DELETE /api/tags/:id"), tagController.deleteTag);
 
 module.exports = router;

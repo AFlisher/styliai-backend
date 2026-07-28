@@ -74,7 +74,7 @@ async function login(req, res) {
     const { email, password, totpCode, recoveryCode } = parsed.data;
 
     const result = await db.query(
-      `SELECT id, email, full_name, password_hash,
+      `SELECT id, email, full_name, password_hash, role,
               mfa_enabled, mfa_secret, mfa_last_timestep,
               (locked_until IS NOT NULL AND locked_until > now()) AS is_locked
        FROM admins
@@ -162,7 +162,15 @@ async function login(req, res) {
       {
         sub: admin.id,
         email: admin.email,
-        role: "admin"
+        // Authentication marker: "this is an admin token". Unchanged by
+        // SEC-15.4 - adminAuthMiddleware and optionalAdminAuth both key off
+        // this exact literal, and the OpenAPI contract pins it to an enum of
+        // one value.
+        role: "admin",
+        // SEC-15.4 authorization tier, deliberately a SEPARATE claim. Folding
+        // it into `role` would make one field answer both "is this an admin"
+        // and "how much may it do", which is how those concerns get conflated.
+        adminRole: admin.role
       },
       process.env.ADMIN_JWT_SECRET,
       {
@@ -183,7 +191,10 @@ async function login(req, res) {
         id: admin.id,
         email: admin.email,
         fullName: admin.full_name,
-        role: "admin"
+        role: "admin",
+        // Returned so the dashboard can hide tabs the role cannot use. Purely
+        // presentational - every decision is re-made server-side from the JWT.
+        adminRole: admin.role
       }
     });
 
