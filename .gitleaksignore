@@ -1,0 +1,17 @@
+# SEC-17.2 - gitleaks allow-list.
+#
+# Every entry is a full fingerprint: commit:path:rule:line. That suppresses
+# exactly one occurrence in exactly one commit. No path and no rule is ever
+# excluded wholesale, so a real secret in the same file, or the same string
+# reintroduced in a later commit, still fails the scan.
+#
+# Add an entry only with a written classification and the date it was checked.
+# An undocumented fingerprint is indistinguishable from a hidden leak.
+
+# --- False positive. Classified 2026-07-28 by reading the line in context. ---
+# `STRONG_SECRET` in the SEC-17.1 boot-check suite is an invented 64-character
+# string used as the fixture that ADMIN_JWT_SECRET quality validation is
+# asserted to *accept*. It has never been a credential for anything, and it is
+# not the value deployed in Railway. gitleaks matches it on the `generic-api-key`
+# rule purely because of its shape.
+73eb1157c62bc4935243cc66dbb4334cb4f1c21b:src/config/__tests__/validateSecrets.test.js:generic-api-key:12
