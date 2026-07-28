@@ -17,7 +17,12 @@ const db = require("../config/db");
 // of the key name (case-insensitive) at every depth. No current admin route
 // submits any of these - the filter exists so that a route added later cannot
 // quietly start persisting a credential, rather than because one does today.
-const SENSITIVE_KEY_PATTERN = /pass|token|secret|authorization|api[-_]?key|credential/i;
+// `totp` and `recovery` were added with SEC-15.2, which introduced two new
+// credential-shaped request fields (totpCode, recoveryCode). A TOTP code is
+// single-use and expires in ~90s, but a recovery code is a long-lived
+// password-equivalent bearer credential and must never be persisted here.
+const SENSITIVE_KEY_PATTERN =
+  /pass|token|secret|authorization|api[-_]?key|credential|totp|recovery/i;
 
 // Serialized-JSON byte ceiling per column. Style prompts are unbounded free
 // text and an admin could submit a megabyte of them; an accountability record

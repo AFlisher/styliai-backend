@@ -119,9 +119,90 @@ function validateAdminJwtSecret(env = process.env) {
   return false;
 }
 
+/**
+ * SEC-15.2: the key that encrypts admin TOTP secrets at rest.
+ *
+ * Checked here, at boot, rather than at first login: a malformed key would
+ * otherwise surface as an admin who suddenly cannot authenticate, at the
+ * moment they need to. Unlike ADMIN_JWT_SECRET this has an exact length
+ * requirement - it is decoded to an AES-256 key, not used as a passphrase -
+ * so the check is a decode plus a byte count. See src/utils/mfaCrypto.js for
+ * the key-management requirements this implies.
+ *
+ * Returns null when acceptable, otherwise a description. Never includes the
+ * key material: this string is written to logs on the failure path.
+ */
+function checkMfaEncryptionKey(env = process.env) {
+  const raw = env.MFA_ENCRYPTION_KEY;
+
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return 'MFA_ENCRYPTION_KEY is not set (or is empty).';
+  }
+
+  const decoded = Buffer.from(String(raw).trim(), 'base64');
+  if (decoded.length !== MFA_ENCRYPTION_KEY_BYTES) {
+    return (
+      `MFA_ENCRYPTION_KEY must decode to exactly ${MFA_ENCRYPTION_KEY_BYTES} bytes, ` +
+      `got ${decoded.length}.`
+    );
+  }
+
+  return null;
+}
+
+const MFA_ENCRYPTION_KEY_BYTES = 32;
+
+/**
+ * Boot-time assertion for the MFA key.
+ *
+ * Deliberately NOT the same production-strict rule as ADMIN_JWT_SECRET, and the
+ * distinction matters:
+ *
+ *   - ABSENT is a warning, even in production. MFA is opt-in per account, so an
+ *     unset key means "nobody has enrolled yet", and refusing to boot over it
+ *     would take the entire API down for a feature no admin is using. It also
+ *     cannot become a bypass: adminMfaService fails closed when it cannot
+ *     decrypt a stored secret, so an enrolled admin is refused, never waved
+ *     through.
+ *
+ *   - PRESENT BUT MALFORMED is fatal in production. That is a real config
+ *     error - a truncated paste, a wrong-length key - and booting on it would
+ *     silently lock out every enrolled admin at their next login, which is the
+ *     failure this check exists to catch early.
+ *
+ * ADMIN_JWT_SECRET gets the stricter rule because it is required for admin auth
+ * to work at all; this key is required only once someone enrolls.
+ */
+function validateMfaEncryptionKey(env = process.env) {
+  const problem = checkMfaEncryptionKey(env);
+
+  if (!problem) {
+    return true;
+  }
+
+  const remedy = 'Generate one with: openssl rand -base64 32';
+  const isAbsent =
+    env.MFA_ENCRYPTION_KEY === undefined ||
+    env.MFA_ENCRYPTION_KEY === null ||
+    String(env.MFA_ENCRYPTION_KEY).trim() === '';
+
+  if (!isAbsent && env.NODE_ENV === 'production') {
+    throw new Error(`[config] ${problem} ${remedy}`);
+  }
+
+  console.warn(
+    `[config] WARNING: ${problem} ${remedy} ` +
+      '(admin MFA enrollment is unavailable until this is set)'
+  );
+  return false;
+}
+
 module.exports = {
   checkAdminJwtSecret,
   validateAdminJwtSecret,
+  checkMfaEncryptionKey,
+  validateMfaEncryptionKey,
   MIN_ADMIN_JWT_SECRET_BYTES,
+  MFA_ENCRYPTION_KEY_BYTES,
   PLACEHOLDER_SECRETS
 };

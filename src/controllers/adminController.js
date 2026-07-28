@@ -3,10 +3,22 @@ const db = require("../config/db");
 const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 const walletService = require("../services/wallet/walletService");
+const adminMfaService = require("../services/adminMfaService");
 
 const adminLoginSchema = z.object({
   email: z.string().email("Invalid email format"),
   password: z.string().min(1, "Password is required"),
+  // SEC-15.2: the second factor travels with the credentials rather than being
+  // exchanged for an intermediate "MFA pending" token. A partially-authenticated
+  // bearer credential is precisely the shape of SEC-1.1 (refresh tokens accepted
+  // as access tokens) - not inventing one is the point.
+  //
+  // Optional at the schema level because unenrolled admins never send it; the
+  // enforcement decision is made below, per account, from mfa_enabled.
+  // Bounded so an oversized value is rejected by validation rather than
+  // reaching the normalizer and the format checks below it.
+  totpCode: z.string().max(16).optional(),
+  recoveryCode: z.string().max(64).optional(),
 });
 
 // SEC-1.2/SEC-15.7: dummy hash compared against when the admin email is
@@ -37,16 +49,33 @@ const RECORD_FAILED_ADMIN_LOGIN_SQL = `
   WHERE id = $1
   RETURNING failed_login_attempts, locked_until`;
 
+/**
+ * Counts one failed authentication attempt against the account and locks it at
+ * the threshold (SEC-1.3).
+ *
+ * Extracted so the SEC-15.2 second-factor path counts toward the exact same
+ * budget as a wrong password - two separate counters would let an attacker who
+ * knows the password get a fresh allowance of code guesses.
+ */
+async function recordFailedAttempt(adminId) {
+  const failRes = await db.query(RECORD_FAILED_ADMIN_LOGIN_SQL, [adminId]);
+  const updated = failRes.rows[0];
+  if (updated && updated.failed_login_attempts === MAX_FAILED_LOGIN_ATTEMPTS && updated.locked_until) {
+    console.warn(`[security] admin account locked for ${LOCKOUT_MINUTES}m after ${MAX_FAILED_LOGIN_ATTEMPTS} failed logins: admin ${adminId}`);
+  }
+}
+
 async function login(req, res) {
   try {
     const parsed = adminLoginSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ message: parsed.error.issues[0].message });
     }
-    const { email, password } = parsed.data;
+    const { email, password, totpCode, recoveryCode } = parsed.data;
 
     const result = await db.query(
       `SELECT id, email, full_name, password_hash,
+              mfa_enabled, mfa_secret, mfa_last_timestep,
               (locked_until IS NOT NULL AND locked_until > now()) AS is_locked
        FROM admins
        WHERE email = $1`,
@@ -80,15 +109,47 @@ async function login(req, res) {
     );
 
     if (!valid) {
-      // SEC-1.3: count the failure and lock the account at the threshold.
-      const failRes = await db.query(RECORD_FAILED_ADMIN_LOGIN_SQL, [admin.id]);
-      const updated = failRes.rows[0];
-      if (updated && updated.failed_login_attempts === MAX_FAILED_LOGIN_ATTEMPTS && updated.locked_until) {
-        console.warn(`[security] admin account locked for ${LOCKOUT_MINUTES}m after ${MAX_FAILED_LOGIN_ATTEMPTS} failed logins: admin ${admin.id}`);
-      }
+      await recordFailedAttempt(admin.id);
       return res.status(401).json({
         message: "Invalid email or password."
       });
+    }
+
+    // SEC-15.2: second factor. Deliberately placed AFTER the password check -
+    // an attacker who does not know the password must never learn from the
+    // response whether an account has MFA enrolled, so every wrong-password
+    // attempt above returns the same generic 401 regardless of mfa_enabled.
+    if (admin.mfa_enabled) {
+      const submittedRecovery = typeof recoveryCode === "string" && recoveryCode.trim() !== "";
+      const submittedTotp = typeof totpCode === "string" && totpCode.trim() !== "";
+
+      if (!submittedRecovery && !submittedTotp) {
+        // The one place enrollment state is disclosed, and only to a caller who
+        // has already proved the password. Distinct from the generic 401 so the
+        // dashboard knows to ask for a code rather than reporting bad
+        // credentials. No token, partial or otherwise, is issued here.
+        return res.status(401).json({
+          code: "MFA_REQUIRED",
+          message: "Enter the 6-digit code from your authenticator app."
+        });
+      }
+
+      const accepted = submittedRecovery
+        ? await adminMfaService.verifyRecoveryCode(admin, recoveryCode)
+        : await adminMfaService.verifyTotp(admin, totpCode);
+
+      if (!accepted) {
+        // SEC-1.3 reuse: a wrong second factor counts toward the same
+        // per-account lockout as a wrong password. Without this, the only
+        // brute-force control on a 6-digit code would be the per-IP limiter,
+        // which is in-memory (resets on every restart) and trivially spread
+        // across addresses.
+        await recordFailedAttempt(admin.id);
+        return res.status(401).json({
+          code: "MFA_INVALID",
+          message: "That code is not valid. Please try again."
+        });
+      }
     }
 
     // Successful login restores the full failed-attempt budget (SEC-1.3).
