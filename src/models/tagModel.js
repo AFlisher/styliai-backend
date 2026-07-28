@@ -88,7 +88,7 @@ async function updateTag(id, { name, isEnabled }) {
 
 async function deleteTag(id) {
   const result = await db.query(
-    `DELETE FROM tags WHERE id = $1 RETURNING id`,
+    `DELETE FROM tags WHERE id = $1 RETURNING *`,
     [id]
   );
 

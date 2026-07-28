@@ -94,7 +94,7 @@ async function deleteCreditPack(id) {
     `
     DELETE FROM credit_packs
     WHERE id = $1
-    RETURNING id
+    RETURNING *
     `,
     [id]
   );

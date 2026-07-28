@@ -103,6 +103,9 @@ async function deleteCategory(req, res) {
       });
     }
 
+    // SEC-15.1: see styleController.deleteStyle.
+    req.auditBefore = result.deleted;
+
     return res.status(204).send();
 
   } catch (err) {

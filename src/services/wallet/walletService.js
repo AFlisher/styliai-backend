@@ -4,6 +4,7 @@
 
 const { v4: uuidv4 } = require("uuid");
 const db = require("../../config/db");
+const adminAuditModel = require("../../models/adminAuditModel");
 
 // Allowed transaction types as per requirements
 const ALLOWED_TYPES = ["purchase", "reward", "generation", "refund", "admin"];
@@ -56,20 +57,54 @@ async function getBalance(userId) {
  * @param {number} amount - Transaction amount (positive for credit, negative for debit).
  * @param {string} type - Transaction type.
  * @param {string} description - Transaction description.
+ * @param {string} [adminId] - SEC-15.1: acting admin for type="admin" rows.
+ *   NULL for every user-driven row (generation, reward, refund), which is why
+ *   it's an optional trailing parameter rather than a required one.
  * @returns {Promise<Object>} The recorded transaction row.
  */
-async function recordTransaction(client, userId, amount, type, description) {
+async function recordTransaction(client, userId, amount, type, description, adminId = null) {
   validateType(type);
-  
+
   const transactionId = uuidv4();
   const queryText = `
-    INSERT INTO wallet_transactions (id, user_id, amount, type, description, created_at)
-    VALUES ($1, $2, $3, $4, $5, NOW())
+    INSERT INTO wallet_transactions (id, user_id, amount, type, description, admin_id, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6, NOW())
     RETURNING id, user_id AS "userId", amount, type, description, created_at AS "createdAt"
   `;
-  const values = [transactionId, userId, amount, type, description];
+  const values = [transactionId, userId, amount, type, description, adminId];
   const res = await client.query(queryText, values);
   return res.rows[0];
+}
+
+/**
+ * SEC-15.1: writes the admin_audit_log row for a manual balance adjustment on
+ * the caller's OPEN transaction, so it commits or rolls back with the balance
+ * change itself.
+ *
+ * This is the fail-closed half of the audit design: if the audit insert fails,
+ * the credits do not move. Refusing to move money without an attributable
+ * record is exactly the point of the finding - unlike catalog edits, where the
+ * middleware records after the fact and a failure is tolerated (see
+ * middleware/auditAdminAction.js).
+ *
+ * @param {Object} client - The caller's active pg client, mid-transaction.
+ * @param {Object} actor - `{ adminId, adminEmail, ip, requestUrl }`.
+ */
+async function recordAdminBalanceAudit(client, actor, { userId, before, after, amount, description }) {
+  await adminAuditModel.recordWithClient(client, {
+    adminId: actor.adminId,
+    adminEmail: actor.adminEmail,
+    action: "POST /api/admin/users/:id/adjust-balance",
+    targetType: "users",
+    targetId: userId,
+    // Real before/after, not the submitted intent: both balances are already
+    // in scope inside the locked transaction, so accuracy costs no extra query.
+    before: { balance: before },
+    after: { balance: after, amount, description },
+    ip: actor.ip,
+    requestUrl: actor.requestUrl,
+    statusCode: 200,
+  });
 }
 
 /**
@@ -80,9 +115,13 @@ async function recordTransaction(client, userId, amount, type, description) {
  * @param {number} amount - Positive integer to credit.
  * @param {string} type - Transaction type.
  * @param {string} description - Transaction description.
+ * @param {Object} [actor] - SEC-15.1: `{ adminId, adminEmail, ip, requestUrl }`
+ *   when an admin is acting. Optional trailing parameter so the three
+ *   user-driven call sites (generateController, stabilityController) are
+ *   unchanged and record no actor.
  * @returns {Promise<number>} The updated wallet balance.
  */
-async function addBalance(userId, amount, type, description) {
+async function addBalance(userId, amount, type, description, actor = null) {
   validateAmount(amount);
   validateType(type);
 
@@ -113,7 +152,18 @@ async function addBalance(userId, amount, type, description) {
     );
 
     // 3. Record transaction
-    await recordTransaction(client, userId, amount, type, description);
+    await recordTransaction(client, userId, amount, type, description, actor ? actor.adminId : null);
+
+    // 4. SEC-15.1: audit row on the same client, before COMMIT.
+    if (actor) {
+      await recordAdminBalanceAudit(client, actor, {
+        userId,
+        before: currentBalance,
+        after: newBalance,
+        amount,
+        description,
+      });
+    }
 
     await client.query("COMMIT");
     return newBalance;
@@ -133,9 +183,10 @@ async function addBalance(userId, amount, type, description) {
  * @param {number} amount - Positive integer to deduct.
  * @param {string} type - Transaction type.
  * @param {string} description - Transaction description.
+ * @param {Object} [actor] - SEC-15.1: see addBalance.
  * @returns {Promise<number>} The updated wallet balance.
  */
-async function deductBalance(userId, amount, type, description) {
+async function deductBalance(userId, amount, type, description, actor = null) {
   validateAmount(amount);
   validateType(type);
 
@@ -177,7 +228,18 @@ async function deductBalance(userId, amount, type, description) {
     }
 
     // 4. Record transaction (as a negative amount for deductions)
-    await recordTransaction(client, userId, -amount, type, description);
+    await recordTransaction(client, userId, -amount, type, description, actor ? actor.adminId : null);
+
+    // 5. SEC-15.1: audit row on the same client, before COMMIT.
+    if (actor) {
+      await recordAdminBalanceAudit(client, actor, {
+        userId,
+        before: currentBalance,
+        after: newBalance,
+        amount: -amount,
+        description,
+      });
+    }
 
     await client.query("COMMIT");
     return newBalance;

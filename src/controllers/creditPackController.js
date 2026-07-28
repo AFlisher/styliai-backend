@@ -126,6 +126,9 @@ async function deleteCreditPack(req, res) {
       return res.status(404).json({ message: "Credit pack not found." });
     }
 
+    // SEC-15.1: see styleController.deleteStyle.
+    req.auditBefore = deleted;
+
     res.status(204).send();
 
   } catch (err) {

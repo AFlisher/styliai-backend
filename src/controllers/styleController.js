@@ -424,6 +424,11 @@ async function deleteStyle(req, res) {
     }
     recommendationService.invalidateCandidateCache();
 
+    // SEC-15.1: hand the removed row to the audit middleware so the deletion
+    // is reconstructable. A 204 carries no body, so this is the only place the
+    // deleted content still exists.
+    req.auditBefore = style;
+
     return res.status(204).send();
 
   } catch (err) {

@@ -492,11 +492,15 @@ async function deleteStyle(id) {
     `
     DELETE FROM styles
     WHERE id = $1
-    RETURNING id
+    RETURNING *
     `,
     [id]
   );
 
+  // SEC-15.1: RETURNING * rather than RETURNING id so the controller can hand
+  // the removed row to the audit log. Callers only test truthiness, so the
+  // wider row is backwards compatible - and it's the difference between an
+  // audit trail that records a deletion and one that can undo it.
   return result.rows[0];
 }
 

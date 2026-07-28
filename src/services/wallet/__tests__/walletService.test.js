@@ -46,7 +46,9 @@ describe("walletService.deductBalance", () => {
     expect(client.query).toHaveBeenNthCalledWith(
       4,
       expect.stringContaining("INSERT INTO wallet_transactions"),
-      [expect.any(String), "user-1", -3, "generation", "Image generated"]
+      // Trailing null is admin_id (SEC-15.1): a user-driven generation has no
+      // acting admin, and must never be attributed to one.
+      [expect.any(String), "user-1", -3, "generation", "Image generated", null]
     );
     expect(client.query).toHaveBeenNthCalledWith(5, "COMMIT");
     expect(client.release).toHaveBeenCalledTimes(1);
@@ -131,7 +133,8 @@ describe("walletService.addBalance", () => {
     expect(client.query).toHaveBeenNthCalledWith(
       4,
       expect.stringContaining("INSERT INTO wallet_transactions"),
-      [expect.any(String), "user-1", 2, "refund", "Refund for failed generation"]
+      // Trailing null is admin_id (SEC-15.1) - see the deduction test above.
+      [expect.any(String), "user-1", 2, "refund", "Refund for failed generation", null]
     );
     expect(client.query).toHaveBeenNthCalledWith(5, "COMMIT");
   });

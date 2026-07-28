@@ -184,12 +184,25 @@ async function adjustUserBalance(req, res) {
       return res.status(400).json({ message: "A reason/description is required." });
     }
 
+    // SEC-15.1: this is the money path, so the audit row is written inside the
+    // same transaction as the balance change rather than after the fact by the
+    // global middleware - if it can't be recorded, the credits don't move.
+    // `req.auditWritten` stops the middleware recording the action a second
+    // time. req.admin is set by adminAuthMiddleware from the verified JWT.
+    const actor = {
+      adminId: req.admin.id,
+      adminEmail: req.admin.email,
+      ip: req.ip || null,
+      requestUrl: req.originalUrl,
+    };
+
     let newBalance;
     if (numericAmount > 0) {
-      newBalance = await walletService.addBalance(id, numericAmount, "admin", description.trim());
+      newBalance = await walletService.addBalance(id, numericAmount, "admin", description.trim(), actor);
     } else {
-      newBalance = await walletService.deductBalance(id, Math.abs(numericAmount), "admin", description.trim());
+      newBalance = await walletService.deductBalance(id, Math.abs(numericAmount), "admin", description.trim(), actor);
     }
+    req.auditWritten = true;
 
     res.json({ balance: newBalance });
 

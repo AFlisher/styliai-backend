@@ -22,6 +22,7 @@ const state = {
   styles: [],
   styleFields: [], // rows in DB shape: { style_id, field_key, label, type, required, placeholder, options, config, sort_order }
   notifications: [], // { user_id, type, title, body, is_read }
+  adminAuditLog: [], // SEC-15.1: { adminId, action, targetId, before, after }
 };
 
 function reset() {
@@ -33,6 +34,7 @@ function reset() {
   state.styles = [];
   state.styleFields = [];
   state.notifications = [];
+  state.adminAuditLog = [];
 }
 
 function seedAdmin(a) {
@@ -188,10 +190,33 @@ async function query(text, params = []) {
     return { rows: claimed ? [{ id: "dr-1" }] : [], rowCount: claimed ? 1 : 0 };
   }
 
+  // ---- admin_audit_log (SEC-15.1) ----
+  // On the money path this INSERT runs inside walletService's transaction, so
+  // an unhandled query here doesn't just fail the audit - it rolls the balance
+  // change back and answers 500. That is the intended fail-closed behaviour,
+  // which is exactly why the fake has to model the table.
+  if (q.includes("INSERT INTO admin_audit_log")) {
+    const [adminId, adminEmail, action, targetType, targetId, before, after, ip, requestUrl, statusCode] = params;
+    const row = {
+      id: `audit-${state.adminAuditLog.length + 1}`,
+      adminId, adminEmail, action, targetType, targetId,
+      before: before ? JSON.parse(before) : null,
+      after: after ? JSON.parse(after) : null,
+      ip, requestUrl, statusCode,
+      createdAt: new Date().toISOString(),
+    };
+    state.adminAuditLog.push(row);
+    return { rows: [{ id: row.id }], rowCount: 1 };
+  }
+
   // ---- wallet_transactions ----
   if (q.includes("INSERT INTO wallet_transactions")) {
-    const [id, userId, amount, type, description] = params;
-    const row = { id, userId, amount, type, description, createdAt: new Date().toISOString() };
+    const [id, userId, amount, type, description, adminId] = params;
+    const row = {
+      id, userId, amount, type, description,
+      adminId: adminId ?? null,
+      createdAt: new Date().toISOString(),
+    };
     state.walletTransactions.push(row);
     return { rows: [row], rowCount: 1 };
   }

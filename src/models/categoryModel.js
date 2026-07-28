@@ -82,7 +82,7 @@ async function deleteCategory(id) {
     `
     DELETE FROM categories
     WHERE id = $1
-    RETURNING id
+    RETURNING *
     `,
     [id]
   );

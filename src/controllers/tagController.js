@@ -101,6 +101,9 @@ async function deleteTag(req, res) {
     }
     recommendationService.invalidateCandidateCache();
 
+    // SEC-15.1: see styleController.deleteStyle.
+    req.auditBefore = tag;
+
     return res.status(204).send();
 
   } catch (err) {

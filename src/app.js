@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 
 const { redactUrl } = require('./utils/redactUrl');
+const auditAdminAction = require('./middleware/auditAdminAction');
 
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
@@ -136,6 +137,13 @@ morgan.token("url", (req) => redactUrl(req.originalUrl || req.url));
 
 app.use(morgan("dev"));
 app.use(express.json());
+
+// SEC-15.1: admin-action accountability. Mounted once here rather than on each
+// admin route so it cannot miss an endpoint - it self-gates on a verified
+// `req.admin`, a mutating method and a 2xx response. Registered after
+// express.json() because it records the parsed body as the intended
+// after-state. See middleware/auditAdminAction.js for the fail-open rationale.
+app.use(auditAdminAction);
 
 // Routes
 app.use('/api/auth', authRoutes);
