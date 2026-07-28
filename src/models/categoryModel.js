@@ -1,5 +1,10 @@
 const db = require("../config/db");
 
+/**
+ * Every category, including disabled ones. Admin-only - see
+ * getPublicCategories for the caller-facing variant, and categoryController
+ * for which one is chosen when.
+ */
 async function getAllCategories() {
   const result = await db.query(`
     SELECT
@@ -10,6 +15,35 @@ async function getAllCategories() {
       created_at AS "createdAt",
       updated_at AS "updatedAt"
     FROM categories
+    ORDER BY sort_order ASC
+  `);
+
+  return result.rows;
+}
+
+/**
+ * SEC-15.6: enabled categories only.
+ *
+ * getCategories previously called getAllCategories unconditionally, so every
+ * authenticated mobile user received disabled - i.e. unreleased or withdrawn -
+ * categories. This mirrors the getStyles/getPublicStyles split that already
+ * guards the styles endpoint.
+ *
+ * The column list is deliberately identical to getAllCategories rather than
+ * narrower: this variant restricts which ROWS are visible, not which fields,
+ * and the response shape must not change for the mobile app.
+ */
+async function getPublicCategories() {
+  const result = await db.query(`
+    SELECT
+      id,
+      name,
+      sort_order AS "sortOrder",
+      is_enabled AS "isEnabled",
+      created_at AS "createdAt",
+      updated_at AS "updatedAt"
+    FROM categories
+    WHERE is_enabled = true
     ORDER BY sort_order ASC
   `);
 
@@ -123,6 +157,7 @@ async function reorderCategories(categories) {
 
 module.exports = {
   getAllCategories,
+  getPublicCategories,
   createCategory,
   updateCategory,
   deleteCategory,

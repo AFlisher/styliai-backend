@@ -2,7 +2,15 @@ const categoryModel = require("../models/categoryModel");
 
 async function getCategories(req, res) {
   try {
-    const categories = await categoryModel.getAllCategories();
+    // SEC-15.6: disabled categories are unreleased or withdrawn product work
+    // and belong to the dashboard only. req.admin is set by optionalAdminAuth
+    // (route-level) purely from a verified admin JWT - any admin tier,
+    // including viewer, may see them, since catalog reads are viewer-tier
+    // under SEC-15.4's route policy. Same shape as the getStyles /
+    // getPublicStyles split in styleController.
+    const categories = req.admin
+      ? await categoryModel.getAllCategories()
+      : await categoryModel.getPublicCategories();
 
     res.json(categories);
   } catch (err) {

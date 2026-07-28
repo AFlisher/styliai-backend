@@ -85,8 +85,17 @@ async function getStyles(req, res) {
       filters.categoryId = categoryId;
     }
 
-    // Only return enabled styles by default, unless requested otherwise (e.g. by Admin dashboard)
-    if (all !== "true") {
+    // SEC-15.6: `?all=true` reveals disabled (unreleased or withdrawn) styles,
+    // so it is gated on the CALLER, not on the query string. Previously the
+    // condition read `all !== "true"` alone, which meant any authenticated
+    // mobile user could ask for the unreleased catalog - the response columns
+    // were already authorized against req.admin one block below, but the rows
+    // were authorized against a string the caller controls.
+    //
+    // A non-admin sending ?all=true is silently filtered rather than rejected:
+    // it is an admin-intended parameter, no mobile client sends it, and a 403
+    // would confirm to a prober that the parameter means something.
+    if (all !== "true" || !req.admin) {
       filters.isEnabled = true;
     }
 

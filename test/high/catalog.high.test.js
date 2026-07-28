@@ -14,6 +14,8 @@ jest.mock("../../src/config/supabase", () => ({ storage: { from: () => ({}) } })
 
 jest.mock("../../src/models/categoryModel", () => ({
   getAllCategories: jest.fn(),
+  // SEC-15.6: non-admin callers now go through the enabled-only variant.
+  getPublicCategories: jest.fn(),
 }));
 jest.mock("../../src/models/styleModel", () => ({
   getPublicStyles: jest.fn(),
@@ -53,7 +55,10 @@ describe("FT-014 — GET /api/categories", () => {
   });
 
   it("returns the category list for an authenticated mobile user", async () => {
-    categoryModel.getAllCategories.mockResolvedValue([
+    // SEC-15.6: a mobile caller is served by getPublicCategories (enabled only)
+    // rather than getAllCategories. Same test intent - the list is returned -
+    // through the variant that now handles this caller.
+    categoryModel.getPublicCategories.mockResolvedValue([
       { id: "c1", name: "Portraits", isEnabled: true, sortOrder: 0 },
       { id: "c2", name: "Anime", isEnabled: true, sortOrder: 1 },
     ]);
@@ -63,6 +68,7 @@ describe("FT-014 — GET /api/categories", () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(2);
     expect(res.body[0].name).toBe("Portraits");
+    expect(categoryModel.getAllCategories).not.toHaveBeenCalled();
   });
 
   it("returns the category list for the Admin Dashboard's admin token", async () => {
