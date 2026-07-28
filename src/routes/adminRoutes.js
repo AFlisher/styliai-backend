@@ -23,6 +23,18 @@ router.post("/users/:id/adjust-balance", adminActionLimiter, adminAuthMiddleware
 
 // Admin-only Stability AI testing tool (Style Manager's "Test Prompt" modal).
 // No wallet charge, no creation-history write - see stabilityController for why.
-router.post("/ai/generate-preview", adminGenerationPreviewLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/ai/generate-preview"), stabilityController.adminPreviewGenerate);
+//
+// SEC-15.8: adminAuthMiddleware runs BEFORE the limiter here, unlike every
+// other route in this file. That ordering is required, not stylistic - the
+// limiter is keyed by req.admin.id, which does not exist until authentication
+// has run. Same pattern as walletRoutes, where router.use(authMiddleware)
+// precedes the user-id-keyed rewardClaimLimiter.
+//
+// The consequence is deliberate: an unauthenticated flood no longer consumes
+// this limiter, because adminAuthMiddleware rejects it first and nothing
+// billable is reached. The role guard sits after the limiter so an
+// under-privileged admin spending their own budget cannot exhaust anyone
+// else's.
+router.post("/ai/generate-preview", adminAuthMiddleware, adminGenerationPreviewLimiter, requireAdminRoleFor("POST /api/admin/ai/generate-preview"), stabilityController.adminPreviewGenerate);
 
 module.exports = router;

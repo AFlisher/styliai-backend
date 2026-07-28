@@ -30,6 +30,24 @@ function userOrIpKeyGenerator(req) {
   return (req.user && req.user.id) || ipKeyGenerator(req.ip);
 }
 
+/**
+ * SEC-15.8: same idea for the admin surface - keys by the acting admin id
+ * (set by adminAuthMiddleware) instead of IP.
+ *
+ * On a limiter that bounds real provider spend, an IP key is the wrong key:
+ * the IP is the one dimension the caller fully controls, so the budget is
+ * evadable by rotating source addresses while the actual cost accrues to one
+ * account. Keying by admin id makes the budget follow the identity that
+ * causes the spend.
+ *
+ * Requires adminAuthMiddleware to run BEFORE the limiter on the route - see
+ * the ordering note in adminRoutes.js. Falls back to the IP so a limiter is
+ * never silently keyless if that ordering is ever broken.
+ */
+function adminOrIpKeyGenerator(req) {
+  return (req.admin && req.admin.id) || ipKeyGenerator(req.ip);
+}
+
 const baseOptions = {
   standardHeaders: true,
   legacyHeaders: false,
@@ -172,9 +190,17 @@ const generationLimiter = makeLimiter("generationLimiter", {
 // wallet charge, so the only thing bounding its cost is this limiter.
 // Tighter than the user-facing generation limiter since it's an internal
 // testing aid, not a product feature under normal load.
+//
+// SEC-15.8: keyed by admin id rather than IP. This limiter is the only bound
+// on real, per-image provider spend, and an IP key let a caller mint a fresh
+// budget per source address - ~14.4k images/day per IP, unbounded across IPs.
+// The budget now follows the account that incurs the cost. Note the store is
+// still in-memory, so this bounds a burst, not a determined actor across
+// restarts; durable metering was deliberately left out of this finding.
 const adminGenerationPreviewLimiter = makeLimiter("adminGenerationPreviewLimiter", {
   windowMs: MINUTE,
   limit: 10,
+  keyGenerator: adminOrIpKeyGenerator,
   message: "Too many preview requests. Please wait a moment and try again.",
 });
 
@@ -289,4 +315,7 @@ module.exports = {
   adminLoginLimiter,
   adminActionLimiter,
   LIMIT_VALUES,
+  // Exported for tests - the key a spend-bounding limiter uses is a security
+  // property, not an implementation detail.
+  adminOrIpKeyGenerator,
 };
