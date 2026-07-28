@@ -2,3 +2,13 @@ node_modules/
 .env
 .env.*
 npm-debug.log*
+
+# Claude Code worktrees: live checkouts of this same repository, never content
+# to track. Five were committed by accident in 0c6a527 as mode-160000 gitlinks
+# with no .gitmodules, which broke `git submodule status` and left five empty
+# directories in every clone.
+#
+# Scoped to worktrees/ rather than all of .claude/ so a shared settings.json or
+# agents/ can still be committed deliberately. settings.local.json is already
+# covered as a local file.
+.claude/worktrees/
