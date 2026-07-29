@@ -57,8 +57,12 @@ function errorKindForStatus(status) {
       return "insufficient_credits";
     case 429:
       return "rate_limited";
-    case 400:
+    // SEC-7.1 Stage 1: 403 is Stability's content-moderation refusal. It was
+    // grouped with the malformed-request statuses below, which made a policy
+    // rejection indistinguishable from a bad payload.
     case 403:
+      return "content_moderation";
+    case 400:
     case 413:
     case 422:
       return "bad_request";
@@ -181,4 +185,8 @@ async function generateImage({ prompt, negativePrompt, aspectRatio, style }) {
 module.exports = {
   generateImage,
   StabilityApiError,
+  // SEC-7.1: exported so the status -> kind mapping is directly testable.
+  // Without this the 403 split is only reachable through a live HTTP call,
+  // which is how it stayed untested long enough for a vacuity probe to notice.
+  __testing: { errorKindForStatus },
 };

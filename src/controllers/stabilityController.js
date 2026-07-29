@@ -3,6 +3,10 @@ const walletService = require("../services/wallet/walletService");
 const creationsModel = require("../models/creationsModel");
 const styleModel = require("../models/styleModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
+const {
+  MODERATION_MESSAGE,
+  logModerationRejection,
+} = require("../utils/contentModeration");
 
 // Flat per-generation cost, since (unlike /api/generate) there is no style
 // entity here to carry a per-item credit_cost. Configurable so pricing can
@@ -111,6 +115,12 @@ function validatePreviewInput({ prompt, negativePrompt, aspectRatio, style }) {
 const KIND_TO_APP_ERROR = {
   validation_error: (message) => new AppError(ErrorCodes.VALIDATION_ERROR, message, 400),
   bad_request: (message) => new AppError(ErrorCodes.VALIDATION_ERROR, message, 400),
+  // SEC-7.1. 422 rather than 400: the request was well-formed and we
+  // understood it, we are refusing it on policy. The message is uniform and
+  // carries no provider detail, so it cannot be used to tune prompts against
+  // the classifier.
+  content_moderation: () =>
+    new AppError(ErrorCodes.CONTENT_MODERATED, MODERATION_MESSAGE, 422),
   missing_api_key: () =>
     new AppError(ErrorCodes.PROVIDER_UNAVAILABLE, "Image generation service is not configured.", 503),
   invalid_api_key: () =>
@@ -126,12 +136,27 @@ const KIND_TO_APP_ERROR = {
 
 // Shared by generateImage and adminPreviewGenerate so the StabilityApiError
 // -> AppError mapping lives in exactly one place.
-function handleStabilityError(err, next) {
+function handleStabilityError(err, next, context = {}) {
   if (err instanceof AppError) {
     return next(err);
   }
 
   if (err instanceof stabilityService.StabilityApiError) {
+    if (err.kind === "content_moderation") {
+      // SEC-7.1: a policy refusal is not an error condition of ours, so it is
+      // recorded as its own structured event rather than as a provider error.
+      logModerationRejection({
+        userId: context.userId,
+        endpoint: context.endpoint,
+        provider: "stability",
+        stage: "prompt",
+        categories: [],
+        reason: "http_403",
+        prompt: context.prompt,
+      });
+      return next(KIND_TO_APP_ERROR.content_moderation());
+    }
+
     console.error("Stability AI Controller Error:", err.kind, err.message, err.details || "");
     const buildAppError = KIND_TO_APP_ERROR[err.kind] || KIND_TO_APP_ERROR.provider_error;
     return next(buildAppError(err.message));
@@ -246,7 +271,11 @@ async function generateImage(req, res, next) {
       return next(new AppError(ErrorCodes.INSUFFICIENT_BALANCE, "Insufficient balance", 403));
     }
 
-    return handleStabilityError(err, next);
+    return handleStabilityError(err, next, {
+      userId: req.user && req.user.id,
+      endpoint: `${req.method} ${req.baseUrl}${req.path}`,
+      prompt: req.body && req.body.prompt,
+    });
   }
 }
 
@@ -276,7 +305,11 @@ async function adminPreviewGenerate(req, res, next) {
       imageUrl: result.imageUrl,
     });
   } catch (err) {
-    return handleStabilityError(err, next);
+    return handleStabilityError(err, next, {
+      userId: req.user && req.user.id,
+      endpoint: `${req.method} ${req.baseUrl}${req.path}`,
+      prompt: req.body && req.body.prompt,
+    });
   }
 }
 

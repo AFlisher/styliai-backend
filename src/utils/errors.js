@@ -10,6 +10,12 @@ const ErrorCodes = {
   // deliberately uniform across every integrity failure so it cannot be used
   // as an oracle.
   INTEGRITY_BLOCKED: "INTEGRITY_BLOCKED",
+  // SEC-7.1. A content-policy refusal, kept distinct from VALIDATION_ERROR
+  // (malformed request) and PROVIDER_UNAVAILABLE (our provider broke). Before
+  // this, Stability's 403 was reported as a validation error and Gemini's
+  // safety blocks as provider failures - so neither the user nor an operator
+  // could tell a policy refusal from an outage.
+  CONTENT_MODERATED: "CONTENT_MODERATED",
   INTERNAL_ERROR: "INTERNAL_ERROR",
 };
 

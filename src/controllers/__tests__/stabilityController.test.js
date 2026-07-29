@@ -275,6 +275,70 @@ describe("stabilityController.generateImage", () => {
     expect(creationsModel.addCreation).not.toHaveBeenCalled();
   });
 
+  // ---- SEC-7.1 Stage 1 -------------------------------------------------
+  it("refunds and maps content_moderation to CONTENT_MODERATED/422", async () => {
+    // Stability returns 403 for a content-policy refusal. It used to be
+    // grouped with 400/413/422 as `bad_request`, so the caller was told their
+    // request was malformed and no operator could tell a policy rejection from
+    // a bad payload.
+    stabilityService.generateImage.mockRejectedValue(
+      new stabilityService.StabilityApiError("content_moderation", "flagged by moderation")
+    );
+    const { req, res, next } = makeReqRes();
+
+    await generateImage(req, res, next);
+
+    // 422, not 400: the request was well-formed and understood; we are
+    // refusing it on policy.
+    expect(next).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "CONTENT_MODERATED", statusCode: 422 })
+    );
+    // The refund path is unchanged - a user must not pay for a generation they
+    // never received, whatever the reason.
+    expect(walletService.addBalance).toHaveBeenCalledWith(
+      "user-1",
+      1,
+      "refund",
+      "Refund for failed Stability generation"
+    );
+    expect(creationsModel.addCreation).not.toHaveBeenCalled();
+  });
+
+  it("keeps a moderation refusal distinct from a provider failure", async () => {
+    stabilityService.generateImage.mockRejectedValue(
+      new stabilityService.StabilityApiError("content_moderation", "flagged")
+    );
+    const moderated = makeReqRes();
+    await generateImage(moderated.req, moderated.res, moderated.next);
+
+    stabilityService.generateImage.mockRejectedValue(
+      new stabilityService.StabilityApiError("provider_error", "upstream 500")
+    );
+    const broken = makeReqRes();
+    await generateImage(broken.req, broken.res, broken.next);
+
+    // The entire point of Stage 1: these two must never arrive as one signal.
+    expect(moderated.next.mock.calls[0][0].code).toBe("CONTENT_MODERATED");
+    expect(broken.next.mock.calls[0][0].code).toBe("PROVIDER_UNAVAILABLE");
+  });
+
+  it("does not leak the provider, the category or the prompt to the caller", async () => {
+    stabilityService.generateImage.mockRejectedValue(
+      new stabilityService.StabilityApiError("content_moderation", "SEXUALLY_EXPLICIT detected in prompt")
+    );
+    const { req, res, next } = makeReqRes();
+
+    await generateImage(req, res, next);
+
+    // Naming the category turns the endpoint into a classifier the caller can
+    // tune prompts against; the detail belongs in the log, not the response.
+    const message = next.mock.calls[0][0].message.toLowerCase();
+    expect(message).not.toContain("sexually");
+    expect(message).not.toContain("stability");
+    expect(message).not.toContain("403");
+    expect(message).toMatch(/content policy/);
+  });
+
   it("refunds and maps insufficient_credits to PROVIDER_UNAVAILABLE/503", async () => {
     stabilityService.generateImage.mockRejectedValue(
       new stabilityService.StabilityApiError("insufficient_credits", "no credits")

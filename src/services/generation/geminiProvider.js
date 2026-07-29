@@ -17,6 +17,7 @@
  *       → Promise<Buffer>
  */
 
+const { ContentModerationError } = require("../../utils/contentModeration");
 const { GoogleGenAI } = require("@google/genai");
 
 /**
@@ -27,6 +28,27 @@ const { GoogleGenAI } = require("@google/genai");
 const GENERATION_MODEL =
     process.env.GEMINI_MODEL || "gemini-2.5-flash-image";
     
+// SEC-7.1 Stage 2. BLOCK_MEDIUM_AND_ABOVE across every category Gemini exposes.
+const SAFETY_THRESHOLD = "BLOCK_MEDIUM_AND_ABOVE";
+const SAFETY_SETTINGS = Object.freeze([
+  { category: "HARM_CATEGORY_HARASSMENT", threshold: SAFETY_THRESHOLD },
+  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: SAFETY_THRESHOLD },
+  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: SAFETY_THRESHOLD },
+  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: SAFETY_THRESHOLD },
+]);
+
+// finishReason / blockReason values that mean "refused on content grounds"
+// rather than "something broke". Anything not listed here stays a provider
+// error, because guessing a refusal from a generic failure is how a Gemini
+// outage would start being reported to users as a policy violation.
+const MODERATION_FINISH_REASONS = new Set([
+  "SAFETY",
+  "PROHIBITED_CONTENT",
+  "IMAGE_SAFETY",
+  "BLOCKLIST",
+  "SPII",
+]);
+
 class GeminiProvider {
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -110,11 +132,46 @@ class GeminiProvider {
           // Request both TEXT and IMAGE so the model can caption + generate.
           // If the model only returns IMAGE, that's fine — we ignore text parts.
           responseModalities: ["TEXT", "IMAGE"],
+          // SEC-7.1 Stage 2: declare the safety posture rather than inherit it.
+          // Relying on provider defaults means the app's content policy can
+          // change without a commit, a review, or anyone noticing. Written as
+          // plain strings rather than SDK enums so an SDK upgrade cannot
+          // silently drop a category.
+          //
+          // BLOCK_NONE is deliberately absent and must stay that way: this app
+          // takes user-uploaded photographs of people, so loosening any of
+          // these is a policy decision with legal weight, not a tuning knob.
+          safetySettings: SAFETY_SETTINGS,
         },
       });
     } catch (err) {
       throw new Error(
         `[GeminiProvider] Gemini API call failed: ${err.message || err}`
+      );
+    }
+
+    // --- SEC-7.1 Stage 1: read the moderation signals ---------------------
+    // Gemini reports a refusal in one of two places depending on whether it
+    // rejected the input or what it produced. Neither was being read, so both
+    // fell through to the "empty response" branch below and were reported as
+    // provider failures.
+    const blockReason = response?.promptFeedback?.blockReason;
+    if (blockReason) {
+      throw new ContentModerationError(
+        "gemini",
+        "prompt",
+        safetyCategoriesFrom(response?.promptFeedback?.safetyRatings),
+        String(blockReason)
+      );
+    }
+
+    const finishReason = response?.candidates?.[0]?.finishReason;
+    if (finishReason && MODERATION_FINISH_REASONS.has(String(finishReason))) {
+      throw new ContentModerationError(
+        "gemini",
+        "output",
+        safetyCategoriesFrom(response?.candidates?.[0]?.safetyRatings),
+        String(finishReason)
       );
     }
 
@@ -145,6 +202,18 @@ class GeminiProvider {
 
     return resultBuffer;
   }
+}
+
+/**
+ * Pulls the categories that actually tripped, so the log says which policy was
+ * hit without echoing the content that hit it.
+ */
+function safetyCategoriesFrom(ratings) {
+  if (!Array.isArray(ratings)) return [];
+  return ratings
+    .filter((r) => r && (r.blocked === true || (r.probability && r.probability !== "NEGLIGIBLE")))
+    .map((r) => String(r.category))
+    .filter(Boolean);
 }
 
 module.exports = GeminiProvider;

@@ -5,6 +5,10 @@ const creationsModel = require("../models/creationsModel");
 const notificationModel = require("../models/notificationModel");
 const generationEventsModel = require("../models/generationEventsModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
+const {
+  MODERATION_MESSAGE,
+  logModerationRejection,
+} = require("../utils/contentModeration");
 const { buildFinalPrompt, PromptValidationError } = require("../utils/promptTemplate");
 
 /**
@@ -200,6 +204,23 @@ async function generateImage(req, res, next) {
     });
 
   } catch (err) {
+    // SEC-7.1: a provider content refusal is not a provider failure. It reaches
+    // here after the generic refund in the block above - the user must not pay
+    // for a generation they never received, whatever the reason - and is then
+    // reported as its own status rather than as a 503.
+    if (err && err.isContentModeration) {
+      logModerationRejection({
+        userId: req.user && req.user.id,
+        endpoint: `${req.method} ${req.baseUrl}${req.path}`,
+        provider: err.provider,
+        stage: err.stage,
+        categories: err.categories,
+        reason: err.reason,
+        prompt: err.moderatedPrompt,
+      });
+      return next(new AppError(ErrorCodes.CONTENT_MODERATED, MODERATION_MESSAGE, 422));
+    }
+
     if (err instanceof AppError) {
       return next(err);
     }
