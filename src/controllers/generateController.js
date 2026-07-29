@@ -9,6 +9,34 @@ const {
   MODERATION_MESSAGE,
   logModerationRejection,
 } = require("../utils/contentModeration");
+const { logGenerationBudgetEvent } = require("../utils/generationBudget");
+const { generationTimeouts } = require("../config/generationTimeouts");
+
+/**
+ * SEC-7.2. An AbortController wired to the response's 'close' event, so a
+ * client that gives up mid-generation actually cancels the provider call
+ * instead of leaving it running against a socket nobody is reading.
+ *
+ * `writableEnded` is the discriminator: 'close' also fires on a normal
+ * response, and aborting then would be a no-op at best and confusing at worst.
+ */
+function callerAbortSignal(res) {
+  const controller = new AbortController();
+  // Total by construction: a response object without an event emitter (or a
+  // listener registration that throws) must never be the reason a generation
+  // fails. Losing cancellation degrades to the previous behaviour - the timeout
+  // still bounds the call.
+  try {
+    if (res && typeof res.on === "function") {
+      res.on("close", () => {
+        if (!res.writableEnded) controller.abort();
+      });
+    }
+  } catch (_) {
+    /* cancellation is best-effort; the budget is not */
+  }
+  return controller.signal;
+}
 const { buildFinalPrompt, PromptValidationError } = require("../utils/promptTemplate");
 
 /**
@@ -115,7 +143,12 @@ async function generateImage(req, res, next) {
     const generationStartedAt = Date.now();
     let generationTimeMs;
     try {
-      const result = await generationService.generate(files, styleId, finalPrompt);
+      const result = await generationService.generate(
+        files,
+        styleId,
+        finalPrompt,
+        callerAbortSignal(res)
+      );
       generatedImageUrl = result.imageUrl;
       generatedThumbnailUrl = result.thumbnailUrl;
       generationTimeMs = Date.now() - generationStartedAt;
@@ -204,6 +237,29 @@ async function generateImage(req, res, next) {
     });
 
   } catch (err) {
+    // SEC-7.2: a timeout and a client cancellation are neither provider
+    // failures nor policy refusals. Both still reach here after the existing
+    // refund above - the user must not pay for a generation they never
+    // received - but they are recorded as their own outcomes so provider
+    // latency and user-abandonment stay visible and separable.
+    if (err && (err.isGenerationTimeout || err.isGenerationCancelled)) {
+      logGenerationBudgetEvent({
+        outcome: err.isGenerationTimeout ? "timeout" : "cancelled",
+        phase: err.phase,
+        budgetMs: err.budgetMs || generationTimeouts.providerMs,
+        provider: process.env.IMAGE_PROVIDER || "gemini",
+        userId: req.user && req.user.id,
+        endpoint: `${req.method} ${req.baseUrl}${req.path}`,
+      });
+      return next(
+        new AppError(
+          ErrorCodes.PROVIDER_UNAVAILABLE,
+          "Image generation took too long. Your credit has been returned.",
+          503
+        )
+      );
+    }
+
     // SEC-7.1: a provider content refusal is not a provider failure. It reaches
     // here after the generic refund in the block above - the user must not pay
     // for a generation they never received, whatever the reason - and is then

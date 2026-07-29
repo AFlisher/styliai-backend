@@ -1,3 +1,5 @@
+const { withGenerationBudget } = require("../../utils/generationBudget");
+const { generationTimeouts } = require("../../config/generationTimeouts");
 "use strict";
 
 /**
@@ -28,6 +30,7 @@ class FalProvider {
     images,
     prompt,
     negativePrompt,
+    abortSignal,
   }) {
     try {
       // flux/dev/image-to-image takes exactly one source image. Refusing
@@ -65,9 +68,17 @@ class FalProvider {
       // Call Fal Model
       //------------------------------------------
 
-      const result = await fal.subscribe(
+      // SEC-7.2: fal.subscribe polls a queued job and was previously unbounded -
+      // the longest-running of the three provider calls and the only one with a
+      // second unbounded network op after it.
+      const result = await withGenerationBudget(
+        "provider",
+        generationTimeouts.providerMs,
+        abortSignal,
+        (signal) => fal.subscribe(
         "fal-ai/flux/dev/image-to-image",
         {
+          abortSignal: signal,
           input: {
             image_url: imageUrl,
 
@@ -86,18 +97,26 @@ class FalProvider {
             sync_mode: true,
           },
         }
+        )
       );
 
       //------------------------------------------
       // Validate response
       //------------------------------------------
 
-      const images =
+      // Named resultImages, not images: the method already destructures an
+      // `images` parameter, and a block-scoped `const images` here put that
+      // parameter in a temporal dead zone - so the guard near the top of this
+      // try block threw ReferenceError on every call. Pre-existing and
+      // unrelated to SEC-7.2; found because the new timeout tests were the
+      // first to execute this provider at all. fal is not the default
+      // (IMAGE_PROVIDER defaults to gemini), which is why it went unnoticed.
+      const resultImages =
         result?.data?.images ||
         result?.images ||
         [];
 
-      if (!images.length) {
+      if (!resultImages.length) {
         throw new Error("Fal returned no generated images.");
       }
 
@@ -105,9 +124,17 @@ class FalProvider {
       // Download image
       //------------------------------------------
 
-      const generatedUrl = images[0].url;
+      const generatedUrl = resultImages[0].url;
 
-      const response = await fetch(generatedUrl);
+      // A plain CDN download, given its own shorter budget: it has no business
+      // inheriting a generation-sized allowance, and unbounded it could hold
+      // the request and its buffered uploads on a stalled connection alone.
+      const response = await withGenerationBudget(
+        "download",
+        generationTimeouts.downloadMs,
+        abortSignal,
+        (signal) => fetch(generatedUrl, { signal })
+      );
 
       if (!response.ok) {
         throw new Error(
@@ -120,6 +147,11 @@ class FalProvider {
 
       return Buffer.from(arrayBuffer);
     } catch (err) {
+      // SEC-7.2: a timeout or a caller cancellation is neither a provider
+      // failure nor something to dump a stack trace for - it passes through
+      // untouched so the controller can tell all three apart.
+      if (err && (err.isGenerationTimeout || err.isGenerationCancelled)) throw err;
+
       console.log("========== FAL ERROR ==========");
       console.dir(err, { depth: null });
 

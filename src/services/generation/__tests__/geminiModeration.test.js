@@ -80,6 +80,40 @@ describe("Stage 2 — declared safety posture", () => {
   });
 });
 
+describe("SEC-7.2 — the budget reaches the SDK", () => {
+  it("passes an AbortSignal to generateContent", async () => {
+    // A vacuity probe caught this: removing the threading broke nothing,
+    // because nothing asserted the signal actually arrives. Without it the
+    // budget would stop us waiting while leaving the socket, the buffered
+    // uploads and the upstream job in place.
+    mockGenerateContent.mockResolvedValue(okResponse());
+
+    await generate(provider);
+
+    expect(mockGenerateContent.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("reports a caller cancellation as cancellation, not a provider failure", async () => {
+    const caller = new AbortController();
+    mockGenerateContent.mockImplementation(
+      () => new Promise((_r, reject) => {
+        caller.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      })
+    );
+
+    const promise = provider.generateImage({
+      images: [{ buffer: Buffer.from("src"), mimeType: "image/jpeg" }],
+      prompt: "a portrait",
+      abortSignal: caller.signal,
+    });
+    caller.abort();
+
+    const err = await promise.catch((e) => e);
+    expect(err.isGenerationCancelled).toBe(true);
+    expect(err.message).not.toMatch(/API call failed/i);
+  });
+});
+
 describe("Stage 1 — a refusal is reported as a refusal", () => {
   it("recognises a blocked prompt", async () => {
     mockGenerateContent.mockResolvedValue({

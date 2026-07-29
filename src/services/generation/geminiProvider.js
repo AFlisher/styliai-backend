@@ -18,6 +18,8 @@
  */
 
 const { ContentModerationError } = require("../../utils/contentModeration");
+const { withGenerationBudget } = require("../../utils/generationBudget");
+const { generationTimeouts } = require("../../config/generationTimeouts");
 const { GoogleGenAI } = require("@google/genai");
 
 /**
@@ -76,7 +78,7 @@ class GeminiProvider {
    *
    * @returns {Promise<Buffer>} The generated image as a Node.js Buffer.
    */
-  async generateImage({ imageBuffer, mimeType, images, prompt, negativePrompt }) {
+  async generateImage({ imageBuffer, mimeType, images, prompt, negativePrompt, abortSignal }) {
     // Normalize to a list of source images. `images` (multi-image styles)
     // wins when provided; otherwise the classic single imageBuffer is used.
     const sources = images?.length
@@ -123,11 +125,21 @@ class GeminiProvider {
     ];
 
     // --- Call the Gemini API ----------------------------------------------
+    // SEC-7.2: bounded and cancellable. Previously this call had no timeout at
+    // all, so a hung Gemini request held the handler and up to 50 MB of
+    // buffered uploads until the socket eventually died.
     let response;
     try {
-      response = await this.ai.models.generateContent({
+      response = await withGenerationBudget(
+        "provider",
+        generationTimeouts.providerMs,
+        abortSignal,
+        (signal) => this.ai.models.generateContent({
         model: GENERATION_MODEL,
         contents,
+        // Google: "AbortSignal is a client-only operation... You will still be
+        // charged usage." This reclaims our resources, not our spend.
+        abortSignal: signal,
         config: {
           // Request both TEXT and IMAGE so the model can caption + generate.
           // If the model only returns IMAGE, that's fine — we ignore text parts.
@@ -143,8 +155,12 @@ class GeminiProvider {
           // these is a policy decision with legal weight, not a tuning knob.
           safetySettings: SAFETY_SETTINGS,
         },
-      });
+        })
+      );
     } catch (err) {
+      // A timeout or cancellation is not a provider failure and must not be
+      // rewritten into one - the caller distinguishes all three.
+      if (err && (err.isGenerationTimeout || err.isGenerationCancelled)) throw err;
       throw new Error(
         `[GeminiProvider] Gemini API call failed: ${err.message || err}`
       );

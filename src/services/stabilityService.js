@@ -18,7 +18,14 @@ const { v4: uuid } = require("uuid");
 const imageStorageService = require("./imageStorageService");
 
 const STABILITY_ENDPOINT = "https://api.stability.ai/v2beta/stable-image/generate/core";
-const REQUEST_TIMEOUT_MS = 60000;
+// SEC-7.2: the hard-coded 60s that used to live here is now the shared
+// generation budget, so Stability, Gemini and fal cannot drift apart. The value
+// is unchanged by default - this is a coordination change, not a retuning.
+const { generationTimeouts } = require("../config/generationTimeouts");
+const {
+  withGenerationBudget,
+  GenerationTimeoutError,
+} = require("../utils/generationBudget");
 
 /**
  * Structured error thrown by generateImage(). `kind` is a stable machine
@@ -105,7 +112,7 @@ async function uploadToSupabase(buffer, outputFormat) {
  * @param {string} [params.style] - Stability's style_preset (e.g. "photographic", "anime").
  * @returns {Promise<{ imageUrl: string, seed: string|undefined, finishReason: string|undefined }>}
  */
-async function generateImage({ prompt, negativePrompt, aspectRatio, style }) {
+async function generateImage({ prompt, negativePrompt, aspectRatio, style, abortSignal }) {
   const apiKey = getApiKey();
 
   if (!prompt || !prompt.trim()) {
@@ -119,33 +126,37 @@ async function generateImage({ prompt, negativePrompt, aspectRatio, style }) {
   if (style) form.append("style_preset", style);
   form.append("output_format", "webp");
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
   let response;
   try {
-    response = await fetch(STABILITY_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "image/*",
-      },
-      body: form,
-      signal: controller.signal,
-    });
+    response = await withGenerationBudget(
+      "provider",
+      generationTimeouts.providerMs,
+      abortSignal,
+      (signal) =>
+        fetch(STABILITY_ENDPOINT, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            Accept: "image/*",
+          },
+          body: form,
+          signal,
+        })
+    );
   } catch (err) {
-    if (err.name === "AbortError") {
-      throw new StabilityApiError(
-        "timeout",
-        `Stability AI request timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`
-      );
+    // Timeout keeps its existing kind so the controller's mapping is unchanged.
+    if (err instanceof GenerationTimeoutError) {
+      throw new StabilityApiError("timeout", err.message);
+    }
+    // Caller cancellation is neither a timeout nor a provider failure and is
+    // rethrown untouched, so the controller can log it as its own outcome.
+    if (err && err.isGenerationCancelled) {
+      throw err;
     }
     throw new StabilityApiError(
       "network_error",
       `Failed to reach Stability AI: ${err.message}`
     );
-  } finally {
-    clearTimeout(timeout);
   }
 
   if (!response.ok) {

@@ -63,7 +63,7 @@ async function uploadToSupabase(buffer, mimetype) {
  * The first image drives the output mime/extension; providers receive the
  * full set.
  */
-async function generate(fileOrFiles, styleId, finalPrompt) {
+async function generate(fileOrFiles, styleId, finalPrompt, abortSignal) {
   const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
   const file = files[0];
 
@@ -90,7 +90,11 @@ async function generate(fileOrFiles, styleId, finalPrompt) {
   // Generate image. `imageBuffer`/`mimeType` stay the first image so the
   // provider signature contract is unchanged; `images` carries the full set
   // for providers that support multiple source images.
+  // SEC-7.2: the budget is owned here and threaded down, rather than each
+  // provider inventing its own. `abortSignal` carries caller cancellation
+  // (client disconnect) alongside it; the provider sees one combined signal.
   const generatedBuffer = await provider.generateImage({
+    abortSignal,
     imageBuffer: file.buffer,
     mimeType: file.mimetype,
     images: files.map((f) => ({ buffer: f.buffer, mimeType: f.mimetype })),

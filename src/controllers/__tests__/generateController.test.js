@@ -35,7 +35,19 @@ function makeReqRes({ file = { buffer: Buffer.from("x") }, styleId = "style-1" }
     file,
     user: { id: "user-1" },
   };
-  const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  // SEC-7.2: the controller registers a 'close' listener to cancel the provider
+  // call when a client gives up, so the fake response needs an emitter surface.
+  const listeners = {};
+  const res = {
+    status: jest.fn().mockReturnThis(),
+    json: jest.fn(),
+    writableEnded: false,
+    on: jest.fn((event, cb) => {
+      listeners[event] = cb;
+    }),
+    // Test seam: simulate the client disconnecting mid-generation.
+    emitClose: () => listeners.close && listeners.close(),
+  };
   const next = jest.fn();
   return { req, res, next };
 }
