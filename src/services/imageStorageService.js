@@ -16,6 +16,7 @@
 const sharp = require("sharp");
 const { v4: uuid } = require("uuid");
 const supabase = require("../config/supabase");
+const imageMetadataSanitizer = require("../utils/imageMetadataSanitizer");
 
 const THUMBNAIL_WIDTH = 320;
 const THUMBNAIL_HEIGHT = 400;
@@ -97,17 +98,32 @@ async function uploadOriginalWithThumbnail({ buffer, mimeType, bucket, baseName 
   const name = baseName || uuid();
   const extension = extensionFromMime(mimeType);
 
+  // SEC-8.3 - the original is what keeps its metadata: the thumbnail below is
+  // re-encoded by sharp and has always come out clean, which is precisely the
+  // asymmetry this closes. Every stored original passes through here, so
+  // sanitising at this choke point means no current or future caller can
+  // store an unstripped file by forgetting to ask.
+  //
+  // Fails closed. An image we cannot clean is not uploaded at all, because the
+  // alternative - storing it unstripped and logging a warning nobody reads -
+  // is the exact outcome this exists to prevent. Buffers reaching here have
+  // already passed magic-byte verification, so a decode failure here means
+  // genuinely broken bytes, not an ordinary photo.
+  const { buffer: sanitizedBuffer } = await imageMetadataSanitizer.sanitizeImageBuffer(buffer);
+
   const url = await uploadObject({
     bucket,
     folder: "original",
-    buffer,
+    buffer: sanitizedBuffer,
     contentType: mimeType,
     filename: `${name}.${extension}`,
   });
 
   let thumbnailUrl = null;
   try {
-    const thumbnailBuffer = await generateThumbnailBuffer(buffer);
+    // Thumbnailed from the sanitised bytes so the two objects are derived from
+    // the same pixels - the sanitiser may have baked in an EXIF rotation.
+    const thumbnailBuffer = await generateThumbnailBuffer(sanitizedBuffer);
     thumbnailUrl = await uploadObject({
       bucket,
       folder: "thumbs",

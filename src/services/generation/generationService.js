@@ -15,6 +15,7 @@
 const styleModel = require("../../models/styleModel");
 const promptBuilder = require("../../utils/promptBuilder");
 const imageStorageService = require("../imageStorageService");
+const imageMetadataSanitizer = require("../../utils/imageMetadataSanitizer");
 
 const GeminiProvider = require("./geminiProvider");
 const FalProvider = require("./falProvider");
@@ -87,6 +88,26 @@ async function generate(fileOrFiles, styleId, finalPrompt, abortSignal) {
   // Choose provider
   const provider = getProvider();
 
+  // SEC-8.3 - strip EXIF/XMP/IPTC before the user's photo leaves our
+  // infrastructure. This has to happen server-side rather than in the app:
+  // the client cannot be relied on (old installs keep sending what they
+  // always sent), and under IMAGE_PROVIDER=fal the source image is uploaded
+  // to fal's CDN under a public URL with retention we do not control and no
+  // delete call on our side - so metadata that ships here is gone for good.
+  //
+  // Sequential rather than Promise.all: this is CPU-bound work on buffers up
+  // to 10 MB each, and a multi-image style firing four decodes at once would
+  // contend with every other in-flight generation on the same box.
+  //
+  // A failure throws, which the controller already treats as a failed
+  // generation and refunds (generateController.js). Failing the generation is
+  // the right outcome - the alternative is quietly forwarding the metadata.
+  const sources = [];
+  for (const f of files) {
+    const { buffer } = await imageMetadataSanitizer.sanitizeImageBuffer(f.buffer);
+    sources.push({ buffer, mimeType: f.mimetype });
+  }
+
   // Generate image. `imageBuffer`/`mimeType` stay the first image so the
   // provider signature contract is unchanged; `images` carries the full set
   // for providers that support multiple source images.
@@ -95,9 +116,9 @@ async function generate(fileOrFiles, styleId, finalPrompt, abortSignal) {
   // (client disconnect) alongside it; the provider sees one combined signal.
   const generatedBuffer = await provider.generateImage({
     abortSignal,
-    imageBuffer: file.buffer,
-    mimeType: file.mimetype,
-    images: files.map((f) => ({ buffer: f.buffer, mimeType: f.mimetype })),
+    imageBuffer: sources[0].buffer,
+    mimeType: sources[0].mimeType,
+    images: sources,
     prompt: resolvedPrompt,
     negativePrompt: promptData.negativePrompt,
   });
