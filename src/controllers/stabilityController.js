@@ -1,6 +1,7 @@
 const stabilityService = require("../services/stabilityService");
 const walletService = require("../services/wallet/walletService");
 const creationsModel = require("../models/creationsModel");
+const { withDeliveryUrls } = require("../utils/creationImageUrl");
 const styleModel = require("../models/styleModel");
 const { AppError, ErrorCodes } = require("../utils/errors");
 const {
@@ -262,8 +263,9 @@ async function generateImage(req, res, next) {
     // Best-effort: the user already paid credits and has a real generated
     // image back, so a history-write hiccup must never fail an otherwise-
     // successful response.
+    let creation;
     try {
-      await creationsModel.addCreation({
+      creation = await creationsModel.addCreation({
         userId,
         styleId: resolvedStyle ? resolvedStyle.id : null,
         styleName: resolvedStyle ? resolvedStyle.name : CREATION_STYLE_NAME,
@@ -274,10 +276,21 @@ async function generateImage(req, res, next) {
       console.error("[stabilityController] Failed to record creation history:", creationErr.message);
     }
 
+    // SEC-8.1B-2: stable delivery URLs, same rule as /api/creations. Falls
+    // back to the storage URLs when the history row could not be written -
+    // there is no id to address, and the user must still get their image.
+    const delivery = creation
+      ? withDeliveryUrls(req, {
+          id: creation.id,
+          imageUrl: result.imageUrl,
+          thumbnailUrl: result.thumbnailUrl,
+        })
+      : { imageUrl: result.imageUrl, thumbnailUrl: result.thumbnailUrl };
+
     return res.status(200).json({
       success: true,
-      imageUrl: result.imageUrl,
-      thumbnailUrl: result.thumbnailUrl,
+      imageUrl: delivery.imageUrl,
+      thumbnailUrl: delivery.thumbnailUrl,
     });
   } catch (err) {
     if (err instanceof AppError) {

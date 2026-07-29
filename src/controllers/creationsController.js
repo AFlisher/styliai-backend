@@ -1,17 +1,100 @@
 const creationsModel = require("../models/creationsModel");
 const creationAssetCleanup = require("../services/creationAssetCleanup");
+const supabase = require("../config/supabase");
+const { withDeliveryUrls, VARIANTS } = require("../utils/creationImageUrl");
 
 const MAX_MIGRATE_ITEMS = 500;
+
+/**
+ * SEC-8.1B-2 — how long a redirect target stays valid.
+ *
+ * Short, because nothing persists it: the client only ever holds the stable
+ * URL, and the signature exists for the seconds between the redirect and the
+ * fetch that follows it. This is the window in which a captured target is
+ * replayable, so it is sized for one image load and nothing more.
+ */
+const SIGNED_URL_TTL_SECONDS = 300;
 
 async function getCreations(req, res) {
   try {
     const userId = req.user.id;
     const creations = await creationsModel.getCreationsByUser(userId);
-    res.json(creations);
+    // SEC-8.1B-2: clients receive stable delivery URLs, never storage URLs.
+    res.json(creations.map((creation) => withDeliveryUrls(req, creation)));
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to load creations." });
   }
+}
+
+/**
+ * GET /api/creations/:id/image and /:id/thumbnail
+ *
+ * SEC-8.1B-2. Authorizes by identity, then redirects to a short-lived signed
+ * URL. The bytes still come from storage's CDN rather than through this
+ * process - only the decision travels through here.
+ *
+ * Deliberately a redirect and not a proxy: streaming every image through
+ * Railway would put the app server on the path of every gallery scroll, and
+ * buy nothing that the signature does not already provide.
+ *
+ * This works identically whether the bucket is public or private, which is the
+ * property that makes the flip a configuration change rather than a deploy.
+ */
+function getCreationImage(variant) {
+  return async function handler(req, res) {
+    try {
+      const userId = req.user.id;
+      const { id } = req.params;
+
+      const creation = await creationsModel.getCreationById(userId, id);
+      // A creation belonging to someone else is reported exactly like one that
+      // does not exist - the response must not confirm that an id is real.
+      if (!creation) {
+        return res.status(404).json({ message: "Creation not found." });
+      }
+
+      // The thumbnail falls back to the original, matching how the client
+      // renders a row that predates thumbnails.
+      const url =
+        variant === VARIANTS.thumbnail
+          ? creation.thumbnailUrl || creation.imageUrl
+          : creation.imageUrl;
+
+      const parsed = creationAssetCleanup.parseStorageUrl(url);
+      if (!parsed) {
+        // A legacy local-only path migrated in by the client, or anything else
+        // that never pointed at our storage. There is nothing to serve.
+        return res.status(404).json({ message: "Creation image not available." });
+      }
+
+      const { data, error } = await supabase.storage
+        .from(parsed.bucket)
+        .createSignedUrl(parsed.path, SIGNED_URL_TTL_SECONDS);
+
+      if (error || !data?.signedUrl) {
+        console.error(
+          JSON.stringify({
+            event: "creation_image_sign_failed",
+            creationId: creation.id,
+            bucket: parsed.bucket,
+            error: error?.message || "no signed url returned",
+          })
+        );
+        return res.status(502).json({ message: "Image is temporarily unavailable." });
+      }
+
+      // The redirect must never be cached: its target expires, and a cached
+      // 302 would keep sending clients at a dead signature. The image itself
+      // is cached by the client under the stable URL, which is what makes this
+      // affordable.
+      res.set("Cache-Control", "private, no-store");
+      return res.redirect(302, data.signedUrl);
+    } catch (err) {
+      console.error(err);
+      return res.status(500).json({ message: "Failed to load creation image." });
+    }
+  };
 }
 
 async function deleteCreation(req, res) {
@@ -102,7 +185,12 @@ async function migrateCreations(req, res) {
       }
     }
 
-    res.status(201).json({ migrated: inserted.length, creations: inserted });
+    res.status(201).json({
+      migrated: inserted.length,
+      // SEC-8.1B-2: the response follows the same rule as the list - storage
+      // URLs go in, delivery URLs come back.
+      creations: inserted.map((creation) => withDeliveryUrls(req, creation)),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Failed to migrate creations." });
@@ -111,6 +199,8 @@ async function migrateCreations(req, res) {
 
 module.exports = {
   getCreations,
+  getCreationImage,
   deleteCreation,
   migrateCreations,
+  SIGNED_URL_TTL_SECONDS,
 };

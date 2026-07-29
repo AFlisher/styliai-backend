@@ -19,6 +19,27 @@ async function getCreationsByUser(userId) {
   return result.rows;
 }
 
+/**
+ * One creation, scoped to its owner. SEC-8.1B-2: the delivery endpoint uses
+ * this, so the `user_id` predicate IS the authorization check - a creation is
+ * only ever served to the account that owns it, decided here rather than by
+ * possession of a URL.
+ */
+async function getCreationById(userId, id) {
+  const result = await db.query(
+    `
+    SELECT
+      id,
+      image_url AS "imageUrl",
+      thumbnail_url AS "thumbnailUrl"
+    FROM creations
+    WHERE id = $1 AND user_id = $2
+    `,
+    [id, userId]
+  );
+  return result.rows[0];
+}
+
 async function addCreation({ userId, styleId, styleName, imageUrl, thumbnailUrl, createdAt }) {
   const result = await db.query(
     `
@@ -53,6 +74,7 @@ async function deleteCreation(userId, id) {
 
 module.exports = {
   getCreationsByUser,
+  getCreationById,
   addCreation,
   deleteCreation,
 };

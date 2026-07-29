@@ -12,6 +12,7 @@ const {
 const { logGenerationBudgetEvent } = require("../utils/generationBudget");
 const { logProviderError } = require("../utils/providerErrorLog");
 const { generationTimeouts } = require("../config/generationTimeouts");
+const { withDeliveryUrls } = require("../utils/creationImageUrl");
 
 /**
  * SEC-7.2. An AbortController wired to the response's 'close' event, so a
@@ -228,10 +229,22 @@ async function generateImage(req, res, next) {
     // additive fields the client round-trips back on the post-generation
     // feedback submission (POST /api/feedback) - existing clients that
     // ignore them are unaffected.
+    // SEC-8.1B-2: hand back stable delivery URLs, which is what the client
+    // caches and persists. Falls back to the storage URLs when the creation
+    // row could not be written (best-effort above) - there is no id to build a
+    // delivery address from, and the user must still get their image.
+    const delivery = creation
+      ? withDeliveryUrls(req, {
+          id: creation.id,
+          imageUrl: generatedImageUrl,
+          thumbnailUrl: generatedThumbnailUrl,
+        })
+      : { imageUrl: generatedImageUrl, thumbnailUrl: generatedThumbnailUrl };
+
     return res.status(200).json({
       success: true,
-      generatedImageUrl,
-      thumbnailUrl: generatedThumbnailUrl,
+      generatedImageUrl: delivery.imageUrl,
+      thumbnailUrl: delivery.thumbnailUrl,
       generationId: creation?.id ?? null,
       categoryId: style.categoryId ?? null,
       generationTimeMs,
