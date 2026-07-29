@@ -7,6 +7,7 @@ const {
   MODERATION_MESSAGE,
   logModerationRejection,
 } = require("../utils/contentModeration");
+const { logProviderError } = require("../utils/providerErrorLog");
 
 // Flat per-generation cost, since (unlike /api/generate) there is no style
 // entity here to carry a per-item credit_cost. Configurable so pricing can
@@ -157,12 +158,28 @@ function handleStabilityError(err, next, context = {}) {
       return next(KIND_TO_APP_ERROR.content_moderation());
     }
 
-    console.error("Stability AI Controller Error:", err.kind, err.message, err.details || "");
+    // SEC-7.3: err.details is the provider's parsed error BODY. Logging it
+    // whole meant whatever Stability chose to echo back went to stdout.
+    logProviderError({
+      provider: "stability",
+      phase: "provider",
+      error: err,
+      kind: err.kind,
+      userId: context.userId,
+      endpoint: context.endpoint,
+    });
     const buildAppError = KIND_TO_APP_ERROR[err.kind] || KIND_TO_APP_ERROR.provider_error;
     return next(buildAppError(err.message));
   }
 
-  console.error("Stability AI Controller Error:", err);
+  // SEC-7.3: previously logged the whole error object.
+  logProviderError({
+    provider: "stability",
+    phase: "controller",
+    error: err,
+    userId: context.userId,
+    endpoint: context.endpoint,
+  });
   return next(new AppError(ErrorCodes.INTERNAL_ERROR, err.message || "Image generation failed.", 500));
 }
 

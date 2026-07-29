@@ -1,4 +1,5 @@
 const { withGenerationBudget } = require("../../utils/generationBudget");
+const { logProviderError } = require("../../utils/providerErrorLog");
 const { generationTimeouts } = require("../../config/generationTimeouts");
 "use strict";
 
@@ -152,18 +153,11 @@ class FalProvider {
       // untouched so the controller can tell all three apart.
       if (err && (err.isGenerationTimeout || err.isGenerationCancelled)) throw err;
 
-      console.log("========== FAL ERROR ==========");
-      console.dir(err, { depth: null });
-
-      if (err.response) {
-        console.log(err.response);
-      }
-
-      if (err.body) {
-        console.log(err.body);
-      }
-
-      console.log("===============================");
+      // SEC-7.3: was console.dir(err, { depth: null }) plus raw dumps of
+      // err.response and err.body. The risk was never today's contents - it was
+      // that a depth-unlimited dump of a third-party object silently starts
+      // including the whole request the day an SDK attaches one.
+      logProviderError({ provider: "fal", phase: "provider", error: err });
 
       const customErr = new Error(`[FalProvider Error] ${err.message}`);
       customErr.status = err.status || err.statusCode || err.response?.status || err.body?.status;

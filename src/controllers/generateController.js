@@ -10,6 +10,7 @@ const {
   logModerationRejection,
 } = require("../utils/contentModeration");
 const { logGenerationBudgetEvent } = require("../utils/generationBudget");
+const { logProviderError } = require("../utils/providerErrorLog");
 const { generationTimeouts } = require("../config/generationTimeouts");
 
 /**
@@ -281,7 +282,15 @@ async function generateImage(req, res, next) {
       return next(err);
     }
 
-    console.error("AI Generation Controller Error:", err);
+    // SEC-7.3: previously logged the whole error object, which on the fal path
+    // carries the provider's response body.
+    logProviderError({
+      provider: process.env.IMAGE_PROVIDER || "gemini",
+      phase: "controller",
+      error: err,
+      userId: req.user && req.user.id,
+      endpoint: `${req.method} ${req.baseUrl}${req.path}`,
+    });
 
     if (err.message === "Insufficient balance") {
       return next(new AppError(ErrorCodes.INSUFFICIENT_BALANCE, "Insufficient balance", 403));
