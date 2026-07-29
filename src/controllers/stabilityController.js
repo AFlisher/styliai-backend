@@ -303,6 +303,13 @@ async function generateImage(req, res, next) {
  * endpoint above, but intentionally skips wallet deduction/refund and
  * creation-history writes - this is an admin testing aid, not a real user
  * generation, and admins have no wallet row to charge against.
+ *
+ * SEC-8.1B-2: `persist: false`, so it also skips STORAGE. Keeping the output
+ * meant two objects per click in `creations` that no row could ever reference -
+ * unreferenced by construction, not by accident - in the bucket that is about
+ * to hold private user content. The image comes back as a data URI instead,
+ * which the dashboard's <img> renders unchanged: no stored object, no orphan,
+ * and nothing for the privacy migration to carry.
  */
 async function adminPreviewGenerate(req, res, next) {
   try {
@@ -315,6 +322,7 @@ async function adminPreviewGenerate(req, res, next) {
       negativePrompt,
       aspectRatio,
       style,
+      persist: false,
     });
 
     return res.status(200).json({

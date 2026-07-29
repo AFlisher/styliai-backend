@@ -195,6 +195,8 @@ describe("the shape the dashboard actually sends", () => {
       negativePrompt: undefined,
       aspectRatio: undefined,
       style: undefined,
+      // SEC-8.1B-2: the preview never stores its output.
+      persist: false,
     });
     expect(res.status).toHaveBeenCalledWith(200);
   });
@@ -236,5 +238,29 @@ describe("validatePreviewInput is pure and total", () => {
   it("uses exact-match sets, so no substring sneaks through", () => {
     expect(() => validatePreviewInput({ prompt: "a", style: "anime-extra" })).toThrow();
     expect(() => validatePreviewInput({ prompt: "a", aspectRatio: "16:9x" })).toThrow();
+  });
+});
+
+describe("SEC-8.1B-2 — the preview does not store its output", () => {
+  it("asks the service not to persist", async () => {
+    const { req, res, next } = makeReqRes({ prompt: "a cat" });
+
+    await adminPreviewGenerate(req, res, next);
+
+    expect(stabilityService.generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({ persist: false })
+    );
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it("passes the image straight through to the dashboard", async () => {
+    // Whatever the service returns is what the <img> renders; the controller
+    // must not reshape it, or the dashboard would need a matching change.
+    stabilityService.generateImage.mockResolvedValue({ imageUrl: "data:image/webp;base64,AAAA" });
+    const { req, res, next } = makeReqRes({ prompt: "a cat" });
+
+    await adminPreviewGenerate(req, res, next);
+
+    expect(res.json).toHaveBeenCalledWith({ success: true, imageUrl: "data:image/webp;base64,AAAA" });
   });
 });

@@ -456,6 +456,8 @@ describe("stabilityController.adminPreviewGenerate", () => {
       negativePrompt: undefined,
       aspectRatio: undefined,
       style: undefined,
+      // SEC-8.1B-2: no wallet, no creation history, and now no storage either.
+      persist: false,
     });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({

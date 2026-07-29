@@ -110,9 +110,11 @@ async function uploadToSupabase(buffer, outputFormat) {
  * @param {string} [params.negativePrompt]
  * @param {string} [params.aspectRatio] - e.g. "1:1", "16:9", "9:16".
  * @param {string} [params.style] - Stability's style_preset (e.g. "photographic", "anime").
+ * @param {boolean} [params.persist=true] - When false the image is returned inline
+ *   as a data URI and never written to storage. See the note below.
  * @returns {Promise<{ imageUrl: string, seed: string|undefined, finishReason: string|undefined }>}
  */
-async function generateImage({ prompt, negativePrompt, aspectRatio, style, abortSignal }) {
+async function generateImage({ prompt, negativePrompt, aspectRatio, style, abortSignal, persist = true }) {
   const apiKey = getApiKey();
 
   if (!prompt || !prompt.trim()) {
@@ -181,6 +183,29 @@ async function generateImage({ prompt, negativePrompt, aspectRatio, style, abort
 
   if (buffer.length === 0) {
     throw new StabilityApiError("provider_error", "Stability AI returned an empty image.");
+  }
+
+  // SEC-8.1B-2 — a non-persisted image is returned inline and never stored.
+  //
+  // The admin prompt-test tool used this same call and kept its output: two
+  // objects per click, written into `creations` with no row that could ever
+  // reference them. They were orphans from birth (SEC-8.4 identified this as
+  // the only recurring orphan source in the system, and the four objects swept
+  // during SEC-8.1A were almost certainly its output), and they put admin test
+  // renders in the bucket that is about to become private user content.
+  //
+  // Returning a data URI rather than a stored object removes the orphan source
+  // and takes the preview out of the privacy migration entirely: the dashboard
+  // renders it in an <img>, which needs no signed URL, no auth header and no
+  // change on its side. Preview output is ephemeral test material - there is
+  // nothing to keep.
+  if (!persist) {
+    return {
+      imageUrl: `data:image/webp;base64,${buffer.toString("base64")}`,
+      thumbnailUrl: null,
+      seed: response.headers.get("seed") || undefined,
+      finishReason: response.headers.get("finish-reason") || undefined,
+    };
   }
 
   const { url: imageUrl, thumbnailUrl } = await uploadToSupabase(buffer, "webp");
