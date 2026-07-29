@@ -5,6 +5,7 @@ const upload = require("../middleware/upload");
 const generateController = require("../controllers/generateController");
 const authMiddleware = require("../middleware/authMiddleware");
 const concurrentGenerationLimiter = require("../middleware/concurrentGenerationLimiter");
+const verifyIntegrity = require("../middleware/verifyIntegrity");
 const { generationLimiter } = require("../middleware/rateLimiters");
 
 /**
@@ -28,6 +29,10 @@ router.post(
   authMiddleware,
   concurrentGenerationLimiter,
   upload.array("file", 5),
+  // SEC-0.2: after multipart parsing - the request hash covers styleId,
+  // fieldValues and the file count, none of which exist before this point.
+  // Annotates req.integrity and never denies; SEC-0.5 will act on it.
+  verifyIntegrity,
   generateController.generateImage
 );
 

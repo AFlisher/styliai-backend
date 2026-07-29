@@ -3,6 +3,7 @@ const router = express.Router();
 
 const stabilityController = require("../controllers/stabilityController");
 const authMiddleware = require("../middleware/authMiddleware");
+const verifyIntegrity = require("../middleware/verifyIntegrity");
 const concurrentGenerationLimiter = require("../middleware/concurrentGenerationLimiter");
 const { generationLimiter } = require("../middleware/rateLimiters");
 
@@ -18,6 +19,7 @@ const { generationLimiter } = require("../middleware/rateLimiters");
  * generateRoutes.js - same provider-cost profile, and the concurrency map is
  * keyed by user id regardless of which of the two endpoints was called.
  */
-router.post("/generate", generationLimiter, authMiddleware, concurrentGenerationLimiter, stabilityController.generateImage);
+// SEC-0.2: verifyIntegrity annotates req.integrity and never denies.
+router.post("/generate", generationLimiter, authMiddleware, concurrentGenerationLimiter, verifyIntegrity, stabilityController.generateImage);
 
 module.exports = router;

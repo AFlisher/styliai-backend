@@ -136,7 +136,19 @@ app.use(cors({
 morgan.token("url", (req) => redactUrl(req.originalUrl || req.url));
 
 app.use(morgan("dev"));
-app.use(express.json());
+// SEC-0.2: keep the raw body alongside the parsed one. The Play Integrity
+// request hash from SEC-0.1 is computed over the exact bytes the client sent,
+// and JSON.stringify(req.body) would not reproduce its key order or spacing -
+// so without this, every /api/ai/generate token would report a request
+// mismatch. The buffer is the one express.json already allocated; this just
+// keeps a reference instead of dropping it.
+app.use(
+  express.json({
+    verify: (req, _res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 
 // SEC-15.1: admin-action accountability. Mounted once here rather than on each
 // admin route so it cannot miss an endpoint - it self-gates on a verified

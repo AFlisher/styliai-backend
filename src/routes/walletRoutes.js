@@ -3,6 +3,7 @@
  */
 
 const express = require("express");
+const verifyIntegrity = require("../middleware/verifyIntegrity");
 const router = express.Router();
 const walletController = require("../controllers/walletController");
 const authMiddleware = require("../middleware/authMiddleware");
@@ -21,6 +22,7 @@ router.get("/", userDataLimiter, walletController.getWalletInfo);
 router.get("/history", userDataLimiter, walletController.getWalletHistory);
 
 // POST /api/wallet/reward
-router.post("/reward", rewardClaimLimiter, walletController.rewardAd);
+// SEC-0.2: verifyIntegrity annotates req.integrity and never denies.
+router.post("/reward", rewardClaimLimiter, verifyIntegrity, walletController.rewardAd);
 
 module.exports = router;

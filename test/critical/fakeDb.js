@@ -23,6 +23,7 @@ const state = {
   styleFields: [], // rows in DB shape: { style_id, field_key, label, type, required, placeholder, options, config, sort_order }
   notifications: [], // { user_id, type, title, body, is_read }
   adminAuditLog: [], // SEC-15.1: { adminId, action, targetId, before, after }
+  integrityVerdicts: new Map(), // SEC-0.2: token_sha256 -> { status, verdict, ... }
 };
 
 function reset() {
@@ -35,6 +36,7 @@ function reset() {
   state.styleFields = [];
   state.notifications = [];
   state.adminAuditLog = [];
+  state.integrityVerdicts = new Map();
 }
 
 function seedAdmin(a) {
@@ -195,6 +197,53 @@ async function query(text, params = []) {
   // an unhandled query here doesn't just fail the audit - it rolls the balance
   // change back and answers 500. That is the intended fail-closed behaviour,
   // which is exactly why the fake has to model the table.
+  // SEC-0.2. Unlike the audit log above, verifyIntegrity is not inside anyone's
+  // transaction and swallows its own failures - an unhandled query here would
+  // annotate DECODE_UNAVAILABLE rather than 500 the request. The table is
+  // modelled anyway so that a test which DOES configure Play Integrity exercises
+  // the real claim/reuse path instead of silently taking the failure branch.
+  if (q.includes("INSERT INTO integrity_verdicts")) {
+    const [tokenSha256, requestHash, endpoint, userId] = params;
+    if (state.integrityVerdicts.has(tokenSha256)) {
+      return { rows: [], rowCount: 0 }; // ON CONFLICT DO NOTHING
+    }
+    state.integrityVerdicts.set(tokenSha256, {
+      token_sha256: tokenSha256,
+      status: "decoding",
+      verdict: null,
+      outcome: null,
+      request_hash: requestHash,
+      endpoint,
+      user_id: userId,
+      claimed_at: new Date(),
+      decoded_at: null,
+    });
+    return { rows: [{ token_sha256: tokenSha256 }], rowCount: 1 };
+  }
+
+  if (q.includes("UPDATE integrity_verdicts") && q.includes("SET status = 'done'")) {
+    const [tokenSha256, verdict, outcome] = params;
+    const row = state.integrityVerdicts.get(tokenSha256);
+    if (row) {
+      row.status = "done";
+      row.verdict = verdict ? JSON.parse(verdict) : null;
+      row.outcome = outcome;
+      row.decoded_at = new Date();
+    }
+    return { rows: [], rowCount: row ? 1 : 0 };
+  }
+
+  if (q.includes("FROM integrity_verdicts")) {
+    const row = state.integrityVerdicts.get(params[0]);
+    if (!row) return { rows: [], rowCount: 0 };
+    return { rows: [{ ...row, verdict_usable: row.decoded_at !== null }], rowCount: 1 };
+  }
+
+  if (q.includes("integrity_verdicts")) {
+    // Stale-claim recovery and eviction: no-ops for the fake's purposes.
+    return { rows: [], rowCount: 0 };
+  }
+
   if (q.includes("INSERT INTO admin_audit_log")) {
     const [adminId, adminEmail, action, targetType, targetId, before, after, ip, requestUrl, statusCode] = params;
     const row = {
