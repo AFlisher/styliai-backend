@@ -25,7 +25,10 @@ function annotation(overrides = {}) {
     endpoint: "POST /api/wallet/reward",
     detail: null,
     cached: false,
-    tokenDigest: "abc123def456",
+    // Zero-entropy on purpose: a realistic-looking hex digest here reads as a
+    // credential to the SEC-17.2 secret scanner, and a test fixture is not
+    // worth an allow-list entry.
+    tokenDigest: "a".repeat(12),
     verdict: null,
     ...overrides,
   };
@@ -63,7 +66,7 @@ describe("compatibility with SEC-0.2", () => {
     expect(result.source).toBe("INTEGRITY_REPLAYED");
     expect(result.reason).toBe("different_request");
     expect(result.cached).toBe(true);
-    expect(result.tokenDigest).toBe("abc123def456");
+    expect(result.tokenDigest).toBe("a".repeat(12));
     expect(result.endpoint).toBe("POST /api/wallet/reward");
   });
 });

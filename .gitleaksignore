@@ -15,3 +15,13 @@
 # not the value deployed in Railway. gitleaks matches it on the `generic-api-key`
 # rule purely because of its shape.
 73eb1157c62bc4935243cc66dbb4334cb4f1c21b:src/config/__tests__/validateSecrets.test.js:generic-api-key:12
+
+# --- False positive. Classified 2026-07-29. ---
+# A `tokenDigest` test fixture in the SEC-0.3 interpretation suite: a 12-char
+# placeholder standing in for the SHA-256 prefix SEC-0.2 puts in its log line.
+# Never a credential for anything, and not derived from one. The fixture was
+# rewritten in the following commit to a zero-entropy value so the scanner
+# stops matching it; this entry covers the one commit in between, because
+# rewriting a shared branch to erase a self-inflicted false positive costs far
+# more than one documented line.
+dd61f19b8b551eeff0efd556d3dd54b9c8b0addf:src/services/__tests__/integrityAssessment.test.js:generic-api-key:28
