@@ -39,7 +39,13 @@ async function addCreation({ userId, styleId, styleName, imageUrl, thumbnailUrl,
 
 async function deleteCreation(userId, id) {
   const result = await db.query(
-    `DELETE FROM creations WHERE id = $1 AND user_id = $2 RETURNING id`,
+    // SEC-8.1A: the stored URLs come back with the deleted row so the caller
+    // can erase the underlying storage objects. Returning them from the DELETE
+    // itself (rather than SELECTing first) keeps the ownership check and the
+    // read of what to erase in one atomic statement - there is no window in
+    // which another request could change the row in between.
+    `DELETE FROM creations WHERE id = $1 AND user_id = $2
+       RETURNING id, image_url AS "imageUrl", thumbnail_url AS "thumbnailUrl"`,
     [id, userId]
   );
   return result.rows[0];

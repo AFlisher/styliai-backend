@@ -1,4 +1,5 @@
 const creationsModel = require("../models/creationsModel");
+const creationAssetCleanup = require("../services/creationAssetCleanup");
 
 const MAX_MIGRATE_ITEMS = 500;
 
@@ -21,6 +22,34 @@ async function deleteCreation(req, res) {
     const deleted = await creationsModel.deleteCreation(userId, id);
     if (!deleted) {
       return res.status(404).json({ message: "Creation not found." });
+    }
+
+    // SEC-8.1A — erase the stored objects too, deliberately after the row is
+    // gone (see the ordering note in creationAssetCleanup). Ownership was
+    // enforced by the DELETE's own user_id predicate above, and the cleanup
+    // re-checks that nothing else still references the objects before removing
+    // them.
+    //
+    // Awaited, but its outcome never reaches the response: by this point the
+    // user's deletion has succeeded and the creation has left their gallery, so
+    // a storage failure must not become a 500 they would retry into a 404. It
+    // is logged instead, and the orphan is reclaimable via
+    // `npm run reconcile-creations`. The inner catch is belt-and-braces over
+    // deleteCreationAssets' own never-throw contract.
+    try {
+      await creationAssetCleanup.deleteCreationAssets({
+        creationId: deleted.id,
+        urls: [deleted.imageUrl, deleted.thumbnailUrl],
+      });
+    } catch (cleanupErr) {
+      console.error(
+        JSON.stringify({
+          event: "creation_asset_erasure",
+          outcome: "failed",
+          creationId: deleted.id,
+          error: cleanupErr?.message || "unknown",
+        })
+      );
     }
 
     res.status(204).send();

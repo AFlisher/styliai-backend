@@ -6,6 +6,7 @@
   "scripts": {
     "create-admin": "node src/utils/createAdmin.js",
     "backfill-thumbnails": "node src/utils/backfillThumbnails.js",
+    "reconcile-creations": "node src/utils/reconcileOrphanedCreations.js",
     "test": "jest"
   },
   "keywords": [],
