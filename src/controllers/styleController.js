@@ -2,6 +2,7 @@ const styleModel = require("../models/styleModel");
 const categoryModel = require("../models/categoryModel");
 const recommendationService = require("../services/recommendationService");
 const autoTagService = require("../services/autoTagService");
+const creationAssetCleanup = require("../services/creationAssetCleanup");
 const {
   PromptValidationError,
   assertUniqueKeys,
@@ -437,6 +438,35 @@ async function deleteStyle(req, res) {
     // is reconstructable. A 204 carries no body, so this is the only place the
     // deleted content still exists.
     req.auditBefore = style;
+
+    // SEC-8.4 — erase the cover objects too, deliberately after the row is
+    // gone, for the same reason SEC-8.1A deletes a creation's row first: with
+    // the row still present the style would reference its own cover and the
+    // referential guard would skip every delete. Storage-first would be worse
+    // still - a failed row delete would leave a live style rendering a dead
+    // cover, with the bytes unrecoverable.
+    //
+    // Awaited, but its outcome never reaches the response: the style is
+    // already deleted and the catalog has moved on, so a storage failure must
+    // not become a 500 the admin retries into a 404. It is logged instead, and
+    // the orphan stays reclaimable via `npm run reconcile-creations
+    // --bucket=style-images` after reading its dry run. RETURNING * gives raw
+    // column names, hence snake_case here.
+    try {
+      await creationAssetCleanup.deleteStyleAssets({
+        styleId: style.id,
+        urls: [style.cover_image, style.cover_image_thumbnail],
+      });
+    } catch (cleanupErr) {
+      console.error(
+        JSON.stringify({
+          event: "style_asset_erasure",
+          outcome: "failed",
+          styleId: style.id,
+          error: cleanupErr?.message || "unknown",
+        })
+      );
+    }
 
     return res.status(204).send();
 
