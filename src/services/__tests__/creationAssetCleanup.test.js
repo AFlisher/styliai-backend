@@ -55,10 +55,11 @@ function event() {
 }
 
 describe("URL parsing", () => {
-  it("reads the bucket out of the URL, because creations live in two of them", () => {
-    // The Stability path writes to `creations`; the main /api/generate path
-    // writes to `style-images`. A caller-supplied bucket would be wrong half
-    // the time.
+  it("reads the bucket out of the URL, because a row can point at either", () => {
+    // Both generation paths now write to `creations` (SEC-8.1B-1), but rows
+    // predating that separation still point at `style-images`, and
+    // `migrateCreations` accepts any URL a client sends. A caller-supplied
+    // bucket would be wrong for exactly the rows that matter.
     expect(parseStorageUrl(CREATION_URL)).toEqual({ bucket: "creations", path: "stability-abc.webp" });
     expect(parseStorageUrl(THUMB_URL)).toEqual({ bucket: "creations", path: "thumbs/stability-abc.webp" });
     expect(parseStorageUrl(STYLE_COVER_URL)).toEqual({ bucket: "style-images", path: "original/cover-1.png" });
@@ -132,7 +133,11 @@ describe("erasure — the actual finding", () => {
     expect(result.deleted).toBe(2);
   });
 
-  it("deletes a creation stored in style-images (the main /api/generate path)", async () => {
+  // Pre-SEC-8.1B-1 this was the main /api/generate path. Generations now go to
+  // `creations`, but rows written before the separation - and anything a client
+  // migrates in - can still point at `style-images`, and those must keep
+  // erasing rather than silently leaving their objects behind.
+  it("deletes a creation stored in style-images (legacy or client-migrated)", async () => {
     nothingReferenced();
 
     await deleteCreationAssets({ creationId: "c-2", urls: [STYLE_COVER_URL, null] });

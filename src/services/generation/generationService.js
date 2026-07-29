@@ -20,10 +20,24 @@ const imageMetadataSanitizer = require("../../utils/imageMetadataSanitizer");
 const GeminiProvider = require("./geminiProvider");
 const FalProvider = require("./falProvider");
 
-// Generated style-transfer output lives in the same bucket as admin-uploaded
-// style images, unchanged from before the thumbnail system - only the
-// original/thumbs path split inside it is new (see imageStorageService).
-const STYLE_IMAGES_BUCKET = "style-images";
+// SEC-8.1B-1 - generated output is USER content and lives in `creations`,
+// never in `style-images`.
+//
+// It used to be written to `style-images`, the admin catalog bucket, under the
+// same `original/` + `thumbs/` prefixes admin covers use and with
+// indistinguishable UUID filenames. That co-mingling is what made the storage
+// privacy work (SEC-8.1B-2) impossible to scope: a bucket holding both public
+// catalog assets and private user photographs cannot be made private, and
+// there is no prefix or naming rule to separate them after the fact.
+//
+// Everything downstream already reads the bucket from the stored URL rather
+// than assuming one - SEC-8.1A's erasure (`parseStorageUrl`), the orphan
+// reconciler (which already defaults to `creations`), and the thumbnail
+// backfill (which already hardcodes `creations` for creation thumbnails) - so
+// this constant was the only place still putting user content in the catalog
+// bucket. The layout, the URL format, the sanitisation and the public
+// delivery model are all unchanged; only the bucket differs.
+const CREATIONS_BUCKET = "creations";
 
 /**
  * Returns the configured AI provider.
@@ -53,7 +67,7 @@ async function uploadToSupabase(buffer, mimetype) {
   return imageStorageService.uploadOriginalWithThumbnail({
     buffer,
     mimeType: mimetype,
-    bucket: STYLE_IMAGES_BUCKET,
+    bucket: CREATIONS_BUCKET,
   });
 }
 

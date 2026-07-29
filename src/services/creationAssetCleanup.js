@@ -24,9 +24,13 @@
  *     a row pointing at an admin style cover, delete it, and have the backend
  *     destroy a catalog asset on their behalf.
  *
- *  2. Admin covers and user generations share `style-images/original/` with
- *     indistinguishable UUID filenames, so the path alone cannot tell you whose
- *     object it is.
+ *  2. A path cannot tell you whose object it is. When this was written, admin
+ *     covers and user generations shared `style-images/original/` with
+ *     indistinguishable UUID filenames. SEC-8.1B-1 has since separated them —
+ *     generations now go to `creations` — but the guard must not be relaxed on
+ *     that basis: `migrateCreations` still accepts an arbitrary client-supplied
+ *     URL, so a row can still be made to point at a catalog object regardless
+ *     of where new generations are written.
  *
  * The guard is therefore referential, not positional: an object is deleted only
  * when NOTHING in the database still points at it. That predicate is checked
@@ -66,6 +70,13 @@ const supabase = require("../config/supabase");
  * the owner's user UUID (see the SEC-14.1/24.1 storage policies), which makes
  * an avatar the one storage object in this system an attacker can name without
  * guessing. `creations` and `style-images` use random UUID filenames.
+ *
+ * `style-images` stays on this list after SEC-8.1B-1 even though new
+ * generations no longer land there. Two reasons: a creation row can still be
+ * pointed at that bucket through `migrateCreations`, and any row predating the
+ * separation would otherwise silently stop erasing its objects — a deletion
+ * that quietly leaves the bytes behind is the exact bug SEC-8.1A fixed. The
+ * referential guard above, not this list, is what protects catalog covers.
  */
 const DELETABLE_BUCKETS = new Set(["creations", "style-images"]);
 

@@ -33,14 +33,23 @@
  *
  * ─── Why `style-images` is not the default target ─────────────────────────
  *
- * `style-images` holds admin catalog covers and user generations in the same
- * `original/` and `thumbs/` prefixes, with indistinguishable UUID filenames —
- * the co-mingling that Split B (Storage Privacy Architecture) exists to fix.
- * The reference check does protect covers there, because `styles.cover_image`
- * points at them, but the blast radius of a bug in that check is the entire
- * product catalog rather than a handful of stale generations. So it must be
- * asked for explicitly, and a dry run should be read carefully before
- * `--delete` is added.
+ * `style-images` is the admin catalog bucket. It once also held user
+ * generations in the same `original/` and `thumbs/` prefixes with
+ * indistinguishable UUID filenames; SEC-8.1B-1 separated them, so generations
+ * now go to `creations` and that bucket is catalog-only. It stays reachable
+ * here for rows that predate the separation and for anything pointed at it
+ * through `migrateCreations`, but it must still be asked for explicitly: the
+ * reference check does protect covers (`styles.cover_image` points at them),
+ * yet the blast radius of a bug in that check there is the entire product
+ * catalog rather than a handful of stale generations. Read a dry run carefully
+ * before adding `--delete`.
+ *
+ * Note what the separation changed for THIS script: `creations` is no longer
+ * just legacy Stability output, it is where every generated image lives. An
+ * object orphaned by a failed creation-row insert now lands in the default
+ * target and will be deleted once it passes the age guard. That is the
+ * intended behaviour, and it is also why the dry-run default matters more
+ * than it did before — a mistake here now costs a user's generated image.
  */
 
 require("dotenv").config();
