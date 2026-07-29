@@ -87,6 +87,13 @@ const config = Object.freeze({
   decodeRateWindowMs: positiveInt("PLAY_INTEGRITY_DECODE_RATE_WINDOW_MS", 60 * 1000),
 
   /**
+   * SEC-0.4. How often the replay ledger is swept. There is no scheduler in
+   * this codebase, so the sweep is opportunistic and piggybacks on a request;
+   * this bounds how often that can happen.
+   */
+  sweepIntervalMs: positiveInt("PLAY_INTEGRITY_SWEEP_INTERVAL_MS", 60 * 60 * 1000),
+
+  /**
    * Bounded wait for the process that did NOT win the decode claim. Total wait
    * is pollAttempts * pollIntervalMs and must stay well inside the request's
    * own timeout; exceeding it yields INTEGRITY_DECODE_UNAVAILABLE rather than

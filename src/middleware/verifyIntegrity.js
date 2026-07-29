@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const { config, isConfigured } = require("../config/playIntegrityConfig");
 const integrityVerdictModel = require("../models/integrityVerdictModel");
 const playIntegrityService = require("../services/playIntegrityService");
+const integrityLedgerSweeper = require("../services/integrityLedgerSweeper");
 
 /**
  * SEC-0.2 — verify a Play Integrity token and annotate the request.
@@ -327,6 +328,11 @@ function verifyIntegrity(req, res, next) {
     const expectedRequestHash = sha256Base64Url(canonical);
     const tokenSha256 = playIntegrityService.hashToken(token);
     tokenDigest = tokenSha256.slice(0, 12);
+
+    // SEC-0.4: opportunistic retention sweep, rate-limited to once an hour and
+    // never awaited. Placed here rather than at the top of the middleware so it
+    // only runs on requests that actually write to the ledger.
+    integrityLedgerSweeper.maybeSweep();
     const budgetKey = (req.user && req.user.id) || req.ip || "unknown";
     pruneDecodeBudget();
 
