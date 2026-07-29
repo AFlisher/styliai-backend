@@ -6,6 +6,7 @@ const generateController = require("../controllers/generateController");
 const authMiddleware = require("../middleware/authMiddleware");
 const concurrentGenerationLimiter = require("../middleware/concurrentGenerationLimiter");
 const verifyIntegrity = require("../middleware/verifyIntegrity");
+const interpretIntegrity = require("../middleware/interpretIntegrity");
 const { generationLimiter } = require("../middleware/rateLimiters");
 
 /**
@@ -33,6 +34,9 @@ router.post(
   // fieldValues and the file count, none of which exist before this point.
   // Annotates req.integrity and never denies; SEC-0.5 will act on it.
   verifyIntegrity,
+  // SEC-0.3: interprets what SEC-0.2 verified into a normalized state.
+  // Annotates req.integrityAssessment; still denies nothing.
+  interpretIntegrity,
   generateController.generateImage
 );
 
