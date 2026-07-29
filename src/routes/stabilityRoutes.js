@@ -5,6 +5,7 @@ const stabilityController = require("../controllers/stabilityController");
 const authMiddleware = require("../middleware/authMiddleware");
 const verifyIntegrity = require("../middleware/verifyIntegrity");
 const interpretIntegrity = require("../middleware/interpretIntegrity");
+const enforceIntegrity = require("../middleware/enforceIntegrity");
 const concurrentGenerationLimiter = require("../middleware/concurrentGenerationLimiter");
 const { generationLimiter } = require("../middleware/rateLimiters");
 
@@ -21,6 +22,6 @@ const { generationLimiter } = require("../middleware/rateLimiters");
  * keyed by user id regardless of which of the two endpoints was called.
  */
 // SEC-0.2: verifyIntegrity annotates req.integrity and never denies.
-router.post("/generate", generationLimiter, authMiddleware, concurrentGenerationLimiter, verifyIntegrity, interpretIntegrity, stabilityController.generateImage);
+router.post("/generate", generationLimiter, authMiddleware, concurrentGenerationLimiter, verifyIntegrity, interpretIntegrity, enforceIntegrity, stabilityController.generateImage);
 
 module.exports = router;

@@ -1,6 +1,7 @@
 const express = require('express');
 const verifyIntegrity = require('../middleware/verifyIntegrity');
 const interpretIntegrity = require('../middleware/interpretIntegrity');
+const enforceIntegrity = require('../middleware/enforceIntegrity');
 const authController = require('../controllers/authController');
 const authMiddleware = require('../middleware/authMiddleware');
 const {
@@ -21,7 +22,7 @@ router.post('/register', registerLimiter, authController.register);
 router.get('/verify', emailVerificationLimiter, authController.verifyEmail);
 // SEC-0.2: verifyIntegrity annotates req.integrity and never denies. Runs
 // pre-auth, so its decode budget is keyed by IP rather than user id.
-router.post('/login', loginLimiter, verifyIntegrity, interpretIntegrity, authController.login);
+router.post('/login', loginLimiter, verifyIntegrity, interpretIntegrity, enforceIntegrity, authController.login);
 router.post('/refresh', refreshLimiter, authController.refreshToken);
 router.post('/logout', accountActionLimiter, authMiddleware, authController.logout);
 router.post('/google', googleSignInLimiter, authController.googleSignIn);

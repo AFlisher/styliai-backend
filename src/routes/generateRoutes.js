@@ -7,6 +7,7 @@ const authMiddleware = require("../middleware/authMiddleware");
 const concurrentGenerationLimiter = require("../middleware/concurrentGenerationLimiter");
 const verifyIntegrity = require("../middleware/verifyIntegrity");
 const interpretIntegrity = require("../middleware/interpretIntegrity");
+const enforceIntegrity = require("../middleware/enforceIntegrity");
 const { generationLimiter } = require("../middleware/rateLimiters");
 
 /**
@@ -37,6 +38,9 @@ router.post(
   // SEC-0.3: interprets what SEC-0.2 verified into a normalized state.
   // Annotates req.integrityAssessment; still denies nothing.
   interpretIntegrity,
+  // SEC-0.5: the first layer allowed to refuse. Endpoint ceiling and the
+  // global kill switch both live in config/integrityPolicy.js.
+  enforceIntegrity,
   generateController.generateImage
 );
 

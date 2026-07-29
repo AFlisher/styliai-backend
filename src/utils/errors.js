@@ -5,6 +5,11 @@ const ErrorCodes = {
   INSUFFICIENT_BALANCE: "INSUFFICIENT_BALANCE",
   PROVIDER_UNAVAILABLE: "PROVIDER_UNAVAILABLE",
   RATE_LIMITED: "RATE_LIMITED",
+  // SEC-0.5. Distinct from FORBIDDEN so clients and dashboards can tell a
+  // device-integrity refusal from an authorization one; the message itself is
+  // deliberately uniform across every integrity failure so it cannot be used
+  // as an oracle.
+  INTEGRITY_BLOCKED: "INTEGRITY_BLOCKED",
   INTERNAL_ERROR: "INTERNAL_ERROR",
 };
 
