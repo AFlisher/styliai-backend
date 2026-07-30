@@ -23,4 +23,8 @@ router.post(
   profileController.uploadAvatar
 );
 
+// R-2 phase 4. Stable, authenticated delivery address for the caller's own
+// avatar. No id in the path, so there is nothing to enumerate.
+router.get("/avatar", userDataLimiter, authMiddleware, profileController.getAvatar);
+
 module.exports = router;

@@ -31,8 +31,34 @@ const sharp = require("sharp");
 const supabase = require("../config/supabase");
 const db = require("../config/db");
 const imageMetadataSanitizer = require("../utils/imageMetadataSanitizer");
+const creationAssetCleanup = require("./creationAssetCleanup");
 
 const AVATAR_BUCKET = "avatars";
+
+/**
+ * How long a redirect target stays valid, matching SEC-8.1B-2's creations
+ * delivery. Short because nothing persists it: the client holds the stable
+ * `/api/profile/avatar` address, and the signature exists only for the seconds
+ * between the redirect and the fetch that follows it.
+ */
+const SIGNED_URL_TTL_SECONDS = 300;
+
+/**
+ * External hosts an avatar may legitimately point at.
+ *
+ * `profiles.avatar_url` holds a Google OAuth picture for most accounts, and
+ * those are not ours to sign - the delivery endpoint has to hand the client the
+ * original URL. That makes the endpoint a redirector, and the column is still
+ * writable by the client through PostgREST, so the set of places it may send a
+ * caller is an allow-list rather than "whatever the row says". Without it, a
+ * user could point their own avatar at any URL and have our domain 302 to it.
+ */
+const ALLOWED_EXTERNAL_AVATAR_HOSTS = new Set([
+  "lh3.googleusercontent.com",
+  "lh4.googleusercontent.com",
+  "lh5.googleusercontent.com",
+  "lh6.googleusercontent.com",
+]);
 
 /**
  * Formats accepted for an avatar, decided from the decoded bytes.
@@ -212,12 +238,73 @@ async function replaceAvatar({ userId, buffer }) {
   return { avatarUrl };
 }
 
+/**
+ * Where to send a caller asking for their own avatar.
+ *
+ * R-2 phase 4. Returns one of:
+ *   {kind:"signed",   url}  - our storage object, behind a short-lived signature
+ *   {kind:"external", url}  - an allow-listed provider URL, passed through
+ *   {kind:"none"}           - no avatar, or one pointing somewhere we refuse
+ *
+ * There is no user id parameter anywhere in this path, by construction: the
+ * only avatar any caller can ask for is their own, so there is nothing to
+ * enumerate. That is a stronger property than checking an id against the
+ * session, because there is no id to get the check wrong about.
+ */
+async function resolveAvatarDelivery(userId) {
+  const { rows } = await db.query(
+    "SELECT avatar_url FROM public.profiles WHERE id = $1",
+    [userId]
+  );
+
+  const stored = rows[0] && rows[0].avatar_url;
+  if (!stored || typeof stored !== "string" || stored.trim() === "") {
+    return { kind: "none" };
+  }
+
+  const parsed = creationAssetCleanup.parseStorageUrl(stored);
+
+  if (!parsed || parsed.bucket !== AVATAR_BUCKET) {
+    // Not one of our avatar objects. Either a provider picture we may forward,
+    // or something we will not redirect to at all.
+    let host;
+    try {
+      const asUrl = new URL(stored);
+      host = asUrl.protocol === "https:" ? asUrl.hostname : null;
+    } catch {
+      host = null;
+    }
+
+    if (host && ALLOWED_EXTERNAL_AVATAR_HOSTS.has(host)) {
+      return { kind: "external", url: stored };
+    }
+    return { kind: "none" };
+  }
+
+  const { data, error } = await supabase.storage
+    .from(parsed.bucket)
+    .createSignedUrl(parsed.path, SIGNED_URL_TTL_SECONDS);
+
+  if (error || !data || !data.signedUrl) {
+    throw new Error(
+      `[avatarService] Signing ${parsed.bucket}/${parsed.path} failed: ${
+        (error && error.message) || "no signed url returned"
+      }`
+    );
+  }
+
+  return { kind: "signed", url: data.signedUrl };
+}
+
 module.exports = {
   replaceAvatar,
   buildAvatarJpeg,
+  resolveAvatarDelivery,
   AvatarValidationError,
   AVATAR_BUCKET,
   ALLOWED_FORMATS,
+  ALLOWED_EXTERNAL_AVATAR_HOSTS,
   MAX_DIMENSION,
   MAX_PIXELS,
+  SIGNED_URL_TTL_SECONDS,
 };

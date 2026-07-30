@@ -7,6 +7,7 @@
     "create-admin": "node src/utils/createAdmin.js",
     "backfill-thumbnails": "node src/utils/backfillThumbnails.js",
     "reconcile-creations": "node src/utils/reconcileOrphanedCreations.js",
+    "reconcile-avatars": "node src/utils/reconcileOrphanedAvatars.js",
     "strip-avatar-metadata": "node src/utils/stripAvatarMetadata.js",
     "test": "jest"
   },
