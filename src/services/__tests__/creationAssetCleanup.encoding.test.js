@@ -78,7 +78,9 @@ describe("SEC-8.4 — the guard checks both spellings", () => {
     const [sql] = db.query.mock.calls[0];
     // Each column must appear with both the $1/$2 and the $3/$4 pair; a column
     // checked against only one spelling is a column that can silently drop a
-    // reference.
+    // reference. SEC-8.4B added the query-string strip, so the column is now
+    // read through split_part - asserted here too, since a column compared
+    // without it drops references exactly the same way.
     for (const column of [
       "image_url",
       "thumbnail_url",
@@ -86,8 +88,12 @@ describe("SEC-8.4 — the guard checks both spellings", () => {
       "cover_image_thumbnail",
       "avatar_url",
     ]) {
-      expect(sql).toMatch(new RegExp(`right\\(${column}, \\$2\\) = \\$1`));
-      expect(sql).toMatch(new RegExp(`right\\(${column}, \\$4\\) = \\$3`));
+      expect(sql).toMatch(
+        new RegExp(`right\\(split_part\\(${column}, '\\?', 1\\), \\$2\\) = \\$1`)
+      );
+      expect(sql).toMatch(
+        new RegExp(`right\\(split_part\\(${column}, '\\?', 1\\), \\$4\\) = \\$3`)
+      );
     }
   });
 });

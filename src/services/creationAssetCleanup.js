@@ -163,6 +163,31 @@ function referenceSuffixes(bucket, path) {
  * precisely what a crafted `migrateCreations` payload would do. `right()` needs
  * no LIKE escaping, so a path containing `%` or `_` cannot widen the match.
  *
+ * SEC-8.4B — the comparison runs against `split_part(col, '?', 1)`, i.e. the
+ * stored URL with any query string removed. A trailing `/<bucket>/<path>` is
+ * only the suffix of a URL that ends at the path, and `profiles.avatar_url`
+ * does not: `uploadAvatar` appends a `?v=<epoch_ms>` CDN cache-buster, so the
+ * suffix match returned FALSE for a live, referenced avatar (measured against
+ * production, not theorised). SEC-8.4 made this comparison independent of
+ * percent-encoding; the query string is a third representation of the same
+ * object that nothing accounted for.
+ *
+ * Today this is latent rather than harmful, because `avatars` is not in
+ * DELETABLE_BUCKETS and no other column carries a query string — the guard
+ * says "not referenced" about objects nothing is allowed to delete anyway. It
+ * stops being latent the moment avatars become deletable, at which point every
+ * live avatar reads as an orphan.
+ *
+ * Splitting on the first `?` is exact rather than heuristic, though not for the
+ * reason it looks like: `encodeURI` does NOT escape `?`, so `getPublicUrl`
+ * emits it raw and an object name containing one would produce a genuinely
+ * ambiguous URL. Such a name cannot exist — Supabase truncates an uploaded
+ * object name at the first `?` (measured: uploading `…-what?.webp` stores
+ * `…-what`). So the first raw `?` in a stored URL is always the query
+ * delimiter, and everything after it is discarded — which also means a crafted
+ * `migrateCreations` payload cannot smuggle a path through the query string to
+ * forge a reference.
+ *
  * ⚠️ Must be called AFTER the creation's own row is deleted. Called before, the
  * row under deletion would reference its own object and every delete would be
  * skipped.
@@ -174,18 +199,24 @@ async function isReferenced({ bucket, path }) {
     `
     SELECT EXISTS (
       SELECT 1 FROM creations
-       WHERE right(image_url, $2) = $1 OR right(image_url, $4) = $3
-          OR right(thumbnail_url, $2) = $1 OR right(thumbnail_url, $4) = $3
+       WHERE right(split_part(image_url, '?', 1), $2) = $1
+          OR right(split_part(image_url, '?', 1), $4) = $3
+          OR right(split_part(thumbnail_url, '?', 1), $2) = $1
+          OR right(split_part(thumbnail_url, '?', 1), $4) = $3
     ) OR EXISTS (
       SELECT 1 FROM styles
-       WHERE right(cover_image, $2) = $1 OR right(cover_image, $4) = $3
-          OR right(cover_image_thumbnail, $2) = $1 OR right(cover_image_thumbnail, $4) = $3
+       WHERE right(split_part(cover_image, '?', 1), $2) = $1
+          OR right(split_part(cover_image, '?', 1), $4) = $3
+          OR right(split_part(cover_image_thumbnail, '?', 1), $2) = $1
+          OR right(split_part(cover_image_thumbnail, '?', 1), $4) = $3
     ) OR EXISTS (
       SELECT 1 FROM profiles
-       WHERE right(avatar_url, $2) = $1 OR right(avatar_url, $4) = $3
+       WHERE right(split_part(avatar_url, '?', 1), $2) = $1
+          OR right(split_part(avatar_url, '?', 1), $4) = $3
     ) OR EXISTS (
       SELECT 1 FROM users
-       WHERE right(avatar_url, $2) = $1 OR right(avatar_url, $4) = $3
+       WHERE right(split_part(avatar_url, '?', 1), $2) = $1
+          OR right(split_part(avatar_url, '?', 1), $4) = $3
     ) AS referenced
     `,
     [decoded, decoded.length, encoded, encoded.length]
