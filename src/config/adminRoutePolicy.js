@@ -54,6 +54,10 @@ const DEFAULT_ADMIN_ROLE = "viewer";
 const ADMIN_ROUTE_POLICY = Object.freeze({
   // --- analytics: read-only ---
   "GET /api/admin/stats": "viewer",
+  // Phase 5: per-process request/error/latency counters. A read, so viewer -
+  // but not public: the auth-failure counters would tell an attacker whether
+  // their probing is being noticed.
+  "GET /api/admin/metrics": "viewer",
   "GET /api/admin/stats/countries": "viewer",
   "GET /api/admin/analytics/generation/overview": "viewer",
   "GET /api/admin/analytics/generation/summary": "viewer",

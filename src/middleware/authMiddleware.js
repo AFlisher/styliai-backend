@@ -1,13 +1,16 @@
 const jwt = require('jsonwebtoken');
+const { logAuthFailure } = require('../utils/securityEvents');
 
 function authMiddleware(req, res, next) {
   const authHeader = req.headers['authorization'];
   if (!authHeader) {
+    logAuthFailure(req, { reason: "no_header" });
     return res.status(401).json({ message: "No authorization header provided." });
   }
 
   const parts = authHeader.split(' ');
   if (parts.length !== 2 || parts[0] !== 'Bearer') {
+    logAuthFailure(req, { reason: "malformed_header" });
     return res.status(401).json({ message: "Authorization header must be in the format 'Bearer <token>'." });
   }
 
@@ -31,6 +34,7 @@ function authMiddleware(req, res, next) {
     // Tokens issued after SEC-1.1 also carry an explicit `type` claim; reject
     // anything that declares itself as something other than an access token.
     if (decoded.type !== undefined && decoded.type !== 'access') {
+      logAuthFailure(req, { reason: "wrong_token_type" });
       return res.status(401).json({ message: "Invalid or expired access token." });
     }
 
@@ -43,7 +47,10 @@ function authMiddleware(req, res, next) {
 
     next();
   } catch (err) {
-    console.error("JWT verification error:", err.message);
+    // The library's message is not logged: it can name the algorithm and echo
+    // parts of the input. A fixed label is all an operator needs, and all an
+    // attacker gets.
+    logAuthFailure(req, { reason: "invalid_token" });
     return res.status(401).json({ message: "Invalid or expired access token." });
   }
 }

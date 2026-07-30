@@ -1,4 +1,5 @@
 const { roleSatisfies, requiredRoleFor } = require("../config/adminRoutePolicy");
+const { logAuthFailure, logAuthzFailure } = require("../utils/securityEvents");
 
 /**
  * SEC-15.4: per-route authorization for the admin surface.
@@ -20,12 +21,16 @@ function requireAdminRole(required) {
     // the request. If that ordering is ever broken, refuse rather than read a
     // role off an unauthenticated request.
     if (!req.admin) {
+      logAuthFailure(req, { reason: "admin_guard_without_auth" });
       return res.status(401).json({ message: "Admin authentication required." });
     }
 
     // Taken only from the verified JWT (adminAuthMiddleware sets it). Never
     // from the body, a header or the query string.
     if (!roleSatisfies(req.admin.adminRole, required)) {
+      // Role names are ours, not user input, so both are safe to record - and
+      // "who tried to do what they could not" is the whole point of the event.
+      logAuthzFailure(req, { reason: "insufficient_role", required, actual: req.admin.adminRole });
       return res.status(403).json({
         code: "INSUFFICIENT_ROLE",
         message: "Your admin role does not permit this action.",

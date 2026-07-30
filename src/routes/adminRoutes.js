@@ -1,6 +1,7 @@
 const express = require("express");
 const adminController = require("../controllers/adminController");
 const adminStatsController = require("../controllers/adminStatsController");
+const healthController = require("../controllers/healthController");
 const adminGenerationAnalyticsController = require("../controllers/adminGenerationAnalyticsController");
 const stabilityController = require("../controllers/stabilityController");
 const adminAuthMiddleware = require("../middleware/adminAuthMiddleware");
@@ -15,6 +16,12 @@ const router = express.Router();
 // matrix test. A route added without an entry there throws at startup.
 router.post("/login", adminLoginLimiter, adminController.login);
 router.get("/stats", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/stats"), adminStatsController.getStats);
+// Phase 5. Deliberately NOT behind adminActionLimiter: that budget is sized
+// for human-paced mutations, and this endpoint exists to be polled by a
+// monitoring scraper. Rate-limiting it would make it fail exactly when it is
+// doing its job. It reads process-local counters, touches no database and no
+// storage, and is still behind admin auth and the viewer role.
+router.get("/metrics", adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/metrics"), healthController.metricsSnapshot);
 router.get("/stats/countries", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/stats/countries"), adminStatsController.getUsersByCountry);
 router.get("/analytics/generation/overview", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/analytics/generation/overview"), adminGenerationAnalyticsController.getOverview);
 router.get("/analytics/generation/summary", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/analytics/generation/summary"), adminGenerationAnalyticsController.getSummary);

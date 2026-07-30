@@ -222,8 +222,21 @@ describe("login lockout (SEC-1.3)", () => {
     expect(res.json).toHaveBeenCalledWith({ message: "Invalid email or password." });
   });
 
-  it("warns (id only, no email) when the failure threshold locks the account", async () => {
-    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+  it("logs the lockout with the id only, never the email", async () => {
+    // Phase 5 moved this from a hand-written console.warn string to the
+    // structured auth_failure event. The security property is unchanged and is
+    // what this asserts: the account id is recorded, the email never is - an
+    // address in a log line is exactly the PII a log leak turns into a target
+    // list. Captured off the real stderr stream rather than a console spy, so
+    // it pins what is actually written.
+    const written = [];
+    const realWrite = process.stderr.write;
+    process.stderr.write = (chunk) => {
+      written.push(String(chunk));
+      return true;
+    };
+    const savedLevel = process.env.LOG_LEVEL;
+    process.env.LOG_LEVEL = "warn";
     try {
       const realHash = await bcrypt.hash("Right1!pass", 4);
       db.query
@@ -237,12 +250,22 @@ describe("login lockout (SEC-1.3)", () => {
 
       await login({ body: { email: "u@example.com", password: "Wr0ng!pass" } }, res);
 
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0][0]).toContain("user-1");
-      expect(warnSpy.mock.calls[0][0]).not.toContain("u@example.com");
+      const log = written.join("");
+      const line = log
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .find((o) => o && o.event === "auth_failure");
+
+      expect(line).toBeDefined();
+      expect(line.reason).toBe("account_locked_threshold_reached");
+      expect(line.subject).toBe("user-1");
+      expect(log).not.toContain("u@example.com");
       expect(res.status).toHaveBeenCalledWith(401);
     } finally {
-      warnSpy.mockRestore();
+      process.stderr.write = realWrite;
+      if (savedLevel === undefined) delete process.env.LOG_LEVEL;
+      else process.env.LOG_LEVEL = savedLevel;
     }
   });
 

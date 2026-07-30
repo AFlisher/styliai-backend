@@ -1,10 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const morgan = require('morgan');
 
-const { redactUrl } = require('./utils/redactUrl');
 const auditAdminAction = require('./middleware/auditAdminAction');
+const requestContext = require('./middleware/requestContext');
+const requestLogger = require('./middleware/requestLogger');
+const healthController = require('./controllers/healthController');
+const { logger } = require('./utils/logger');
+const { logUnexpectedError, logValidationFailure } = require('./utils/securityEvents');
 
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
@@ -128,15 +131,18 @@ app.use(cors({
   credentials: true,
 }));
 
-// SEC-16.1: override morgan's built-in `url` token so credential-bearing query
-// parameters are redacted before anything is written. Overriding the built-in
-// rather than adding a `:safe-url` token to a hand-rolled format string means
-// redaction is the default for *every* morgan format - so switching this
-// logger to `combined` or a structured format later (SEC-16.4) cannot silently
-// reintroduce the leak.
-morgan.token("url", (req) => redactUrl(req.originalUrl || req.url));
+// Phase 5: correlation id first, so every line written for this request -
+// including anything logged by a middleware that runs before the response - can
+// be joined on `requestId`, and so the client gets it back in X-Request-Id.
+app.use(requestContext);
 
-app.use(morgan("dev"));
+// Phase 5: one structured line per completed request, replacing morgan("dev").
+// The coloured dev format was not machine-readable, carried no correlation id
+// and reported duration only as human text, so nothing about it could be
+// queried or alerted on. SEC-16.1's redaction is preserved - the URL still goes
+// through redactUrl before it is written, now in the one place every log line
+// passes through rather than in a morgan-only format token.
+app.use(requestLogger);
 // SEC-0.2: keep the raw body alongside the parsed one. The Play Integrity
 // request hash from SEC-0.1 is computed over the exact bytes the client sent,
 // and JSON.stringify(req.body) would not reproduce its key order or spacing -
@@ -157,6 +163,12 @@ app.use(
 // express.json() because it records the parsed body as the intended
 // after-state. See middleware/auditAdminAction.js for the fail-open rationale.
 app.use(auditAdminAction);
+
+// Phase 5: liveness and readiness. Unauthenticated and deliberately terse -
+// see healthController for what they must not disclose. Registered before the
+// API routes so a probe never depends on anything below it.
+app.get('/healthz', healthController.healthz);
+app.get('/readyz', healthController.readyz);
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -182,17 +194,41 @@ app.get('/', (req, res) => {
 
 // Unhandled Route Handler (404)
 app.use((req, res, next) => {
-  res.status(404).json({ message: "Resource not found." });
+  res.status(404).json({ message: "Resource not found.", requestId: req.id });
 });
 
 // Error Handling Middleware
+//
+// Phase 5: every error response now carries the correlation id, so a user can
+// quote it and an operator can find the matching server-side line. The client
+// still learns nothing else - no stack, no internal message, no dependency
+// name. An AppError's message is deliberate, author-written, user-facing text;
+// anything else collapses to one fixed sentence.
 app.use((err, req, res, next) => {
   if (err && err.isAppError) {
-    return res.status(err.statusCode).json({ code: err.code, message: err.message });
+    // Client-caused refusals are logged as validation events rather than as
+    // errors: they are the API working, and drowning the error stream in them
+    // is what makes a real 500 easy to miss.
+    if (err.statusCode >= 400 && err.statusCode < 500) {
+      logValidationFailure(req, { code: err.code, reason: "app_error" });
+    } else {
+      logger.warn("app_error", {
+        requestId: req.id,
+        code: err.code,
+        status: err.statusCode,
+      });
+    }
+    return res
+      .status(err.statusCode)
+      .json({ code: err.code, message: err.message, requestId: req.id });
   }
 
-  console.error("Internal Server Error:", err);
-  res.status(500).json({ code: "INTERNAL_ERROR", message: "An internal server error occurred." });
+  logUnexpectedError(req, err, { where: "error_handler" });
+  res.status(500).json({
+    code: "INTERNAL_ERROR",
+    message: "An internal server error occurred.",
+    requestId: req.id,
+  });
 });
 
 module.exports = app;

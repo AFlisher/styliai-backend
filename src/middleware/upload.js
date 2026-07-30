@@ -1,5 +1,6 @@
 const multer = require("multer");
 const { verifyImageMagicBytes } = require("../utils/verifyImageContent");
+const { logUploadFailure } = require("../utils/securityEvents");
 
 // Same image allow-list as the admin upload (src/middleware/adminImageUpload.js):
 // /api/generate forwards the file to storage and the paid AI provider, so
@@ -36,24 +37,30 @@ function single(fieldName) {
     multerUpload.single(fieldName)(req, res, async (err) => {
       if (err) {
         if (err.message === "INVALID_FILE_TYPE") {
+          logUploadFailure(req, { stage: "declared_type", reason: "not_allowed" });
           return res.status(400).json({
             message: "Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed.",
           });
         }
 
         if (err.code === "LIMIT_FILE_SIZE") {
+          logUploadFailure(req, { stage: "size_limit", reason: "too_large" });
           return res.status(400).json({
             message: "File is too large. Maximum size is 10MB.",
           });
         }
 
-        console.error("Upload error:", err.message);
+        logUploadFailure(req, { stage: "multipart_parse", reason: err.code || "parse_failed" });
         return res.status(400).json({
           message: "File upload failed.",
         });
       }
 
       if (req.file && !(await verifyImageMagicBytes(req.file.buffer, ALLOWED_MIME_TYPES))) {
+        // The signature check, which is the one that catches a relabelled
+        // payload. Worth its own stage label: a spike here is somebody probing,
+        // whereas declared_type is usually just a confused client.
+        logUploadFailure(req, { stage: "magic_bytes", reason: "signature_mismatch" });
         return res.status(400).json({
           message: "Invalid file type. Only JPEG, PNG, WEBP, and GIF images are allowed.",
         });

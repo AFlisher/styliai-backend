@@ -1,6 +1,11 @@
 "use strict";
 
 const avatarService = require("../services/avatarService");
+const {
+  logAuditEvent,
+  logUploadFailure,
+  logUnexpectedError,
+} = require("../utils/securityEvents");
 
 /**
  * POST /api/profile/avatar — R-2 phase 1.
@@ -21,22 +26,22 @@ async function uploadAvatar(req, res) {
       buffer: req.file.buffer,
     });
 
+    logAuditEvent(req, { action: "avatar_upload", subject: req.user.id });
     return res.status(200).json({ avatarUrl });
   } catch (err) {
     // A rejected file is the user's problem and is reported as such. Anything
     // else is ours: storage or the database failed, and the caller must not be
     // told to go and pick a different photo over it.
     if (err && err.isAvatarValidation) {
+      // A rejected image is the validation layer working, not a fault: it is
+      // recorded as an upload failure with the stage that refused it, so a
+      // spike is visible without drowning the error stream.
+      logUploadFailure(req, { stage: "avatar_validation", reason: "rejected", bucket: "avatars" });
       return res.status(400).json({ message: err.message });
     }
 
-    console.error(
-      JSON.stringify({
-        event: "avatar_upload_failed",
-        userId: req.user && req.user.id,
-        error: (err && err.message) || "unknown",
-      })
-    );
+    logUploadFailure(req, { stage: "avatar_store", reason: "storage_or_db_failed", bucket: "avatars" });
+    logUnexpectedError(req, err, { where: "uploadAvatar" });
     return res.status(500).json({ message: "Could not update your profile photo." });
   }
 }
@@ -66,13 +71,7 @@ async function getAvatar(req, res) {
     res.set("Cache-Control", "private, no-store");
     return res.redirect(302, delivery.url);
   } catch (err) {
-    console.error(
-      JSON.stringify({
-        event: "avatar_delivery_failed",
-        userId: req.user && req.user.id,
-        error: (err && err.message) || "unknown",
-      })
-    );
+    logUnexpectedError(req, err, { where: "getAvatar" });
     return res.status(502).json({ message: "Profile photo is temporarily unavailable." });
   }
 }

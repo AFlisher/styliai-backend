@@ -1,4 +1,9 @@
 const { z } = require('zod');
+const {
+  logAuditEvent,
+  logAuthFailure,
+  logUnexpectedError,
+} = require("../utils/securityEvents");
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
@@ -200,6 +205,7 @@ async function register(req, res) {
 
     // COMMIT transaction if everything succeeded
     await client.query('COMMIT');
+    logAuditEvent(req, { action: "registration", subject: userId });
     res.status(201).json({ message: "Registration successful. Please verify your email." });
 
   } catch (err) {
@@ -221,7 +227,7 @@ async function register(req, res) {
       });
     }
 
-    console.error("Registration error:", err);
+    logUnexpectedError(req, err, { where: "register" });
     res.status(500).json({ message: "An unexpected error occurred during registration." });
   } finally {
     if (client) {
@@ -263,6 +269,8 @@ async function verifyEmail(req, res) {
       [user.id]
     );
 
+    logAuditEvent(req, { action: "email_verification", subject: user.id });
+
     res.send(renderVerificationPage({
       success: true,
       title: "Email Verified Successfully",
@@ -270,7 +278,7 @@ async function verifyEmail(req, res) {
     }));
 
   } catch (err) {
-    console.error("Verification error:", err);
+    logUnexpectedError(req, err, { where: "verifyEmail" });
     res.status(500).send(renderVerificationPage({
       success: false,
       title: "Server Error",
@@ -297,6 +305,10 @@ async function login(req, res) {
       // SEC-1.2: burn the same bcrypt work as a real comparison before the
       // generic 401, so a timing probe can't distinguish this path.
       await bcrypt.compare(validated.password, DUMMY_PASSWORD_HASH);
+      // The response is deliberately identical for every failure branch
+      // (SEC-1.2/1.3); only the server-side log tells them apart, which is
+      // exactly where that distinction is safe to make.
+      logAuthFailure(req, { reason: "unknown_email" });
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
@@ -328,7 +340,7 @@ async function login(req, res) {
       if (updated && updated.failed_login_attempts === MAX_FAILED_LOGIN_ATTEMPTS && updated.locked_until) {
         // Alerting placeholder until security-event logging (SEC-16.3)
         // exists. User id only - no email/PII in logs (Section 16).
-        console.warn(`[security] account locked for ${LOCKOUT_MINUTES}m after ${MAX_FAILED_LOGIN_ATTEMPTS} failed logins: user ${user.id}`);
+        logAuthFailure(req, { reason: "account_locked_threshold_reached", subject: user.id });
       }
       return res.status(401).json({ message: "Invalid email or password." });
     }
@@ -350,6 +362,8 @@ async function login(req, res) {
       [hashedRefresh, user.id]
     );
 
+    logAuditEvent(req, { action: "login", subject: user.id, details: { method: "password" } });
+
     res.json({
       accessToken,
       refreshToken,
@@ -365,7 +379,7 @@ async function login(req, res) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: err.issues[0].message });
     }
-    console.error("Login error:", err);
+    logUnexpectedError(req, err, { where: "login" });
     res.status(500).json({ message: "An unexpected error occurred." });
   }
 }
@@ -476,7 +490,7 @@ async function forgotPassword(req, res) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ message: err.issues[0].message });
     }
-    console.error("Forgot password error:", err);
+    logUnexpectedError(req, err, { where: "forgotPassword" });
     res.status(500).json({ message: "An unexpected error occurred." });
   }
 }
@@ -513,7 +527,7 @@ async function renderResetPassword(req, res) {
     res.send(renderResetPasswordPage({ token }));
 
   } catch (err) {
-    console.error("Render reset password page error:", err);
+    logUnexpectedError(req, err, { where: "renderResetPassword" });
     res.status(500).send(renderResetPasswordPage({
       error: "A server error occurred. Please try again later."
     }));
@@ -555,6 +569,8 @@ async function postResetPassword(req, res) {
       [newPasswordHash, user.id]
     );
 
+    logAuditEvent(req, { action: "password_reset", subject: user.id });
+
     res.send(renderVerificationPage({
       success: true,
       title: "Password Reset Success",
@@ -568,7 +584,7 @@ async function postResetPassword(req, res) {
         error: err.issues[0].message
       }));
     }
-    console.error("Reset password POST error:", err);
+    logUnexpectedError(req, err, { where: "postResetPassword" });
     res.status(500).send(renderResetPasswordPage({
       error: "An error occurred on the server. Please try again."
     }));
@@ -593,7 +609,7 @@ async function checkVerificationStatus(req, res) {
     const verified = result.rows.length > 0 ? result.rows[0].email_verified : false;
     res.json({ verified });
   } catch (err) {
-    console.error("Check status error:", err);
+    logUnexpectedError(req, err, { where: "checkVerificationStatus" });
     res.status(500).json({ message: "Server error." });
   }
 }
@@ -648,7 +664,7 @@ async function resendVerification(req, res) {
     res.json({ message: "If an account with this email exists and is unverified, a verification link has been sent." });
 
   } catch (err) {
-    console.error("Resend verification error:", err);
+    logUnexpectedError(req, err, { where: "resendVerification" });
     res.status(500).json({ message: "Server error." });
   }
 }
@@ -785,7 +801,7 @@ async function googleSignIn(req, res) {
     });
 
   } catch (err) {
-    console.error('Google sign-in error:', err);
+    logUnexpectedError(req, err, { where: "googleSignIn" });
     res.status(500).json({ message: 'An unexpected error occurred during Google sign-in.' });
   }
 }
@@ -837,6 +853,8 @@ async function changePassword(req, res) {
       [newHash, hashToken(newRefreshToken), userId]
     );
 
+    logAuditEvent(req, { action: "password_change", subject: userId });
+
     res.json({
       message: "Password changed successfully.",
       accessToken: newAccessToken,
@@ -844,7 +862,7 @@ async function changePassword(req, res) {
     });
 
   } catch (err) {
-    console.error("Change password error:", err);
+    logUnexpectedError(req, err, { where: "changePassword" });
     res.status(500).json({ message: "An unexpected error occurred." });
   }
 }
@@ -859,9 +877,10 @@ async function logout(req, res) {
       'UPDATE public.users SET refresh_token_hash = NULL WHERE id = $1',
       [req.user.id]
     );
+    logAuditEvent(req, { action: "logout", subject: req.user.id });
     return res.status(204).send();
   } catch (err) {
-    console.error("Logout error:", err);
+    logUnexpectedError(req, err, { where: "logout" });
     return res.status(500).json({ message: "An unexpected error occurred." });
   }
 }

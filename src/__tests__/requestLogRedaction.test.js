@@ -45,11 +45,40 @@ async function captureStdout(fn) {
 describe("request log redaction (SEC-16.1)", () => {
   let app;
 
+  let savedLogLevel;
+
   beforeAll(() => {
     process.env.ADMIN_JWT_SECRET =
       process.env.ADMIN_JWT_SECRET || "test-only-secret-never-used-in-production";
+    // The logger is quiet below `error` under NODE_ENV=test so suites are not
+    // drowned in output. This one is specifically about what gets written, so
+    // it turns request logging on for itself.
+    savedLogLevel = process.env.LOG_LEVEL;
+    process.env.LOG_LEVEL = "info";
     app = require("../app");
   });
+
+  afterAll(() => {
+    if (savedLogLevel === undefined) delete process.env.LOG_LEVEL;
+    else process.env.LOG_LEVEL = savedLogLevel;
+  });
+
+  /** The parsed http_request line, so assertions read named fields. */
+  function httpLine(log) {
+    const line = log
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((o) => o && o.event === "http_request");
+    if (!line) throw new Error(`no http_request line in: ${log}`);
+    return line;
+  }
 
   beforeEach(() => {
     jest.spyOn(console, "error").mockImplementation(() => {});
@@ -63,7 +92,7 @@ describe("request log redaction (SEC-16.1)", () => {
       request(app).get(`/api/auth/verify?token=${VERIFY_TOKEN}`)
     );
 
-    expect(log).toContain("GET /api/auth/verify");
+    expect(httpLine(log).path).toContain("/api/auth/verify");
     expect(log).not.toContain(VERIFY_TOKEN);
     expect(log).toContain("token=[REDACTED]");
   });
@@ -73,7 +102,7 @@ describe("request log redaction (SEC-16.1)", () => {
       request(app).get(`/api/auth/reset-password?token=${RESET_TOKEN}`)
     );
 
-    expect(log).toContain("GET /api/auth/reset-password");
+    expect(httpLine(log).path).toContain("/api/auth/reset-password");
     expect(log).not.toContain(RESET_TOKEN);
     expect(log).toContain("token=[REDACTED]");
   });
@@ -83,9 +112,15 @@ describe("request log redaction (SEC-16.1)", () => {
       request(app).get(`/api/auth/verify?token=${VERIFY_TOKEN}`)
     );
 
-    // Path, method and status code are the primary triage signals - the fix
-    // must not cost us any of them.
-    expect(log).toMatch(/GET \/api\/auth\/verify\?token=\[REDACTED\] 400/);
+    // Path, method and status code are the primary triage signals - neither
+    // the redaction nor the format change may cost us any of them. Asserted as
+    // named fields now, plus the correlation id that makes the line joinable.
+    const line = httpLine(log);
+    expect(line.method).toBe("GET");
+    expect(line.path).toBe("/api/auth/verify?token=[REDACTED]");
+    expect(line.status).toBe(400);
+    expect(typeof line.durationMs).toBe("number");
+    expect(line.requestId).toEqual(expect.any(String));
   });
 
   it("keeps the token key visible so 'token missing' stays distinguishable", async () => {

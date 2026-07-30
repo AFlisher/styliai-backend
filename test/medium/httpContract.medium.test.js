@@ -16,7 +16,22 @@ describe("API-018 — unknown routes return the JSON 404 handler", () => {
   it("returns 404 with the standard body", async () => {
     const res = await request(app).get("/api/this-does-not-exist");
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({ message: "Resource not found." });
+    // Phase 5 added the correlation id to every error body, so a user can quote
+    // it and an operator can find the matching server-side line. Still an exact
+    // match - nothing else may creep into an error response.
+    expect(res.body).toEqual({
+      message: "Resource not found.",
+      requestId: expect.any(String),
+    });
+  });
+
+  it("echoes the correlation id in the response header too", async () => {
+    // The body carries it for humans; the header carries it for anything
+    // automated, and for responses that have no body to put it in.
+    const res = await request(app).get("/api/this-does-not-exist");
+
+    expect(res.headers["x-request-id"]).toEqual(expect.any(String));
+    expect(res.headers["x-request-id"]).toBe(res.body.requestId);
   });
 });
 
