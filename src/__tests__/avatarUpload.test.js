@@ -40,6 +40,7 @@ const sharp = require("sharp");
 const db = require("../config/db");
 const supabase = require("../config/supabase");
 const app = require("../app");
+const { avatarUploadLimiter } = require("../middleware/rateLimiters");
 const imageMetadataSanitizer = require("../utils/imageMetadataSanitizer");
 const { carriesMetadata } = imageMetadataSanitizer;
 
@@ -110,6 +111,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Phase 6 gave this endpoint its own limiter (10 per 15 minutes, keyed on the
+  // user). That budget is sized for a human changing their profile photo, not
+  // for a suite that uploads ~30 times, so each test starts from a clean one.
+  // Reset rather than raised: the limit is the production value and this suite
+  // must keep exercising the real middleware chain.
+  avatarUploadLimiter.resetKey(USER_ID);
   jest.spyOn(console, "error").mockImplementation(() => {});
   mockUpload.mockResolvedValue({ error: null });
   mockGetPublicUrl.mockImplementation((path) => ({

@@ -60,7 +60,45 @@ const baseOptions = {
 // values by hand.
 const LIMIT_VALUES = {};
 
-function makeLimiter(name, { windowMs, limit, message, keyGenerator }) {
+/**
+ * Phase 6: per-limiter environment overrides.
+ *
+ * `RATE_LIMIT_<NAME>_LIMIT` and `RATE_LIMIT_<NAME>_WINDOW_MS`, upper-snake-cased
+ * from the limiter name (loginLimiter -> RATE_LIMIT_LOGIN_LIMITER_LIMIT). This
+ * exists so an incident can be responded to by changing configuration rather
+ * than by shipping a build - tightening a limiter under attack, or loosening
+ * one that turns out to be locking real users out.
+ *
+ * An unparseable or non-positive value is IGNORED, not clamped and not fatal.
+ * A typo in an env var must not silently produce a limiter of 0 (which would
+ * lock every user out of an endpoint) nor stop the app booting. The default is
+ * always a safe value, so falling back to it is the correct failure mode; the
+ * override is logged so a typo is visible rather than mysterious.
+ */
+function overrideFor(name, key, fallback) {
+  const envName = `RATE_LIMIT_${name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase()}_${key}`;
+  const raw = process.env[envName];
+  if (raw === undefined || raw === "") return fallback;
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      JSON.stringify({
+        event: "rate_limit_override_ignored",
+        limiter: name,
+        variable: envName,
+        reason: "not_a_positive_number",
+      })
+    );
+    return fallback;
+  }
+  return parsed;
+}
+
+function makeLimiter(name, { windowMs: defaultWindowMs, limit: defaultLimit, message, keyGenerator }) {
+  const windowMs = overrideFor(name, "WINDOW_MS", defaultWindowMs);
+  const limit = Math.floor(overrideFor(name, "LIMIT", defaultLimit));
+
   if (!Number.isFinite(windowMs) || windowMs <= 0) {
     throw new Error(`Invalid windowMs for limiter "${name}": ${windowMs}`);
   }
@@ -208,6 +246,18 @@ const adminGenerationPreviewLimiter = makeLimiter("adminGenerationPreviewLimiter
 // Uploads (src/routes/uploadRoutes.js)
 // ---------------------------------------------------------------------------
 
+// Phase 6. The avatar endpoint decodes and re-encodes every image server-side
+// (R-2), so each request costs real CPU - the generic userDataLimiter that
+// guarded it was sized for cheap JSON reads, not for that. 10/15min is far
+// above any human's rate of changing their profile photo and far below what
+// would make repeated re-encoding a useful way to burn our CPU.
+const avatarUploadLimiter = makeLimiter("avatarUploadLimiter", {
+  windowMs: 15 * MINUTE,
+  limit: 10,
+  message: "Too many profile photo updates. Please try again in a few minutes.",
+  keyGenerator: userOrIpKeyGenerator,
+});
+
 const uploadLimiter = makeLimiter("uploadLimiter", {
   windowMs: MINUTE,
   limit: 30,
@@ -308,6 +358,7 @@ module.exports = {
   generationLimiter,
   adminGenerationPreviewLimiter,
   uploadLimiter,
+  avatarUploadLimiter,
   ssvCallbackLimiter,
   rewardClaimLimiter,
   publicReadLimiter,
@@ -315,6 +366,9 @@ module.exports = {
   adminLoginLimiter,
   adminActionLimiter,
   LIMIT_VALUES,
+  // Exported so a test can assert the shared header policy once, rather than
+  // restating it for each of the eighteen limiters.
+  BASE_OPTIONS: baseOptions,
   // Exported for tests - the key a spend-bounding limiter uses is a security
   // property, not an implementation detail.
   adminOrIpKeyGenerator,
