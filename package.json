@@ -10,7 +10,10 @@
     "reconcile-creations": "node src/utils/reconcileOrphanedCreations.js",
     "reconcile-avatars": "node src/utils/reconcileOrphanedAvatars.js",
     "strip-avatar-metadata": "node src/utils/stripAvatarMetadata.js",
-    "test": "jest"
+    "test": "jest",
+    "backup:db": "node src/utils/backupDatabase.js",
+    "backup:storage": "node src/utils/backupStorage.js",
+    "verify:restore": "node src/utils/verifyRestore.js"
   },
   "keywords": [],
   "author": "",

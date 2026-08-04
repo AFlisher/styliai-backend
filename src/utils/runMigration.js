@@ -1,10 +1,27 @@
 const { Client } = require('pg');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { buildSslConfig } = require('../config/db');
 require('dotenv').config();
 
 const MIGRATIONS_DIR = path.join(__dirname, '../..');
+
+/**
+ * SEC-21.1 (Phase 9) - the ledger migration, applied BEFORE the schedule.
+ *
+ * It cannot simply be appended to MIGRATIONS like every other migration,
+ * because the runner records each application INTO it: the table has to exist
+ * before the first row can be written, and appending it at the end would mean
+ * the whole schedule ran unrecorded on a fresh database and only became
+ * traceable from the next deploy onward - i.e. the one run where knowing what
+ * happened matters most is the one run with no record of it.
+ *
+ * It is bootstrapped instead, and accounted for as its own category in the
+ * completeness check below so the "every file on disk is accounted for"
+ * guarantee is preserved rather than quietly gaining an exception.
+ */
+const LEDGER_MIGRATION = 'migration_schema_migrations.sql';
 
 /**
  * Every migration that must run, in dependency order.
@@ -96,7 +113,7 @@ function assertScheduleIsComplete() {
     .filter((f) => f.startsWith('migration') && f.endsWith('.sql'))
     .sort();
 
-  const accounted = new Set([...MIGRATIONS, ...Object.keys(SUPERSEDED)]);
+  const accounted = new Set([...MIGRATIONS, ...Object.keys(SUPERSEDED), LEDGER_MIGRATION]);
   const unlisted = onDisk.filter((f) => !accounted.has(f));
   const missing = [...accounted].filter((f) => !onDisk.includes(f)).sort();
 
@@ -126,14 +143,54 @@ function assertScheduleIsComplete() {
       bothLists.forEach((f) => console.error(`     ! ${f}`));
       console.error('');
     }
-    console.error(`   On disk: ${onDisk.length} · scheduled: ${MIGRATIONS.length} · superseded: ${Object.keys(SUPERSEDED).length}`);
+    console.error(`   On disk: ${onDisk.length} · scheduled: ${MIGRATIONS.length} · superseded: ${Object.keys(SUPERSEDED).length} · ledger: 1`);
     process.exit(1);
   }
 
   console.log(
     `✅ Schedule covers all ${onDisk.length} migration files ` +
-    `(${MIGRATIONS.length} to apply, ${Object.keys(SUPERSEDED).length} superseded).`
+    `(${MIGRATIONS.length} to apply, ${Object.keys(SUPERSEDED).length} superseded, 1 ledger).`
   );
+}
+
+/** SHA-256 of a migration file, as applied. See migration_schema_migrations.sql. */
+function checksumOf(sql) {
+  return crypto.createHash('sha256').update(sql, 'utf8').digest('hex');
+}
+
+/**
+ * SEC-21.1 - records an application in the ledger.
+ *
+ * NEVER THROWS INTO THE MIGRATION RUN, and that ordering is deliberate: the
+ * ledger is bookkeeping ABOUT the schema, not part of it. A database that
+ * received its DDL correctly but failed to write a ledger row is in a good
+ * state with poor records; refusing the migration over it would turn a
+ * bookkeeping problem into a failed deploy or, during recovery, a blocked
+ * restore. It reports loudly instead.
+ *
+ * `applied_at` is set once and never updated - the fact worth keeping is when
+ * this database FIRST received the change. Replays update `last_run_at`,
+ * `run_count` and `duration_ms`.
+ */
+async function recordMigration(client, file, sql, durationMs) {
+  try {
+    const result = await client.query(
+      `INSERT INTO schema_migrations (filename, checksum, duration_ms)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (filename) DO UPDATE
+         SET last_run_at = now(),
+             run_count   = schema_migrations.run_count + 1,
+             duration_ms = EXCLUDED.duration_ms
+       RETURNING checksum AS "storedChecksum", run_count AS "runCount"`,
+      [file, checksumOf(sql), durationMs]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.warn(
+      `   ⚠️  Could not record ${file} in schema_migrations: ${err.message}`
+    );
+    return null;
+  }
 }
 
 async function runMigration() {
@@ -155,17 +212,53 @@ async function runMigration() {
 
   let applied = 0;
   let connected = false;
+  // SEC-21.1: migrations whose stored checksum no longer matches the file.
+  const checksumDrift = [];
 
   try {
     await client.connect();
     connected = true;
     console.log("✅ Connected to database. Running migration script...");
 
+    // SEC-21.1: bootstrap the ledger first, so every migration below - including
+    // on a brand-new database - is recorded as it is applied.
+    {
+      const ledgerSql = fs.readFileSync(path.join(MIGRATIONS_DIR, LEDGER_MIGRATION), 'utf8');
+      const startedAt = Date.now();
+      await client.query(ledgerSql);
+      await recordMigration(client, LEDGER_MIGRATION, ledgerSql, Date.now() - startedAt);
+      console.log(`   [ledger] ✅ ${LEDGER_MIGRATION}`);
+    }
+
     for (const file of MIGRATIONS) {
       const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
+
+      const startedAt = Date.now();
       await client.query(sql);
+      const durationMs = Date.now() - startedAt;
+
+      const record = await recordMigration(client, file, sql, durationMs);
       applied += 1;
+
+      // SEC-21.1: the drift warning. A stored checksum that no longer matches
+      // the file means an already-applied migration was EDITED afterwards -
+      // against this project's own rule - so a rebuilt database will not
+      // reproduce the schema that was backed up, and nothing else in the system
+      // would ever say so. Warn rather than fail: the DDL just ran successfully,
+      // and blocking a deploy (or a recovery) over a bookkeeping discrepancy is
+      // the wrong trade. It is loud, and `npm run verify:restore` fails on it.
+      if (record && record.storedChecksum && record.storedChecksum !== checksumOf(sql)) {
+        checksumDrift.push(file);
+      }
+
       console.log(`   [${String(applied).padStart(2)}/${MIGRATIONS.length}] ✅ ${file}`);
+    }
+
+    if (checksumDrift.length) {
+      console.warn('\n⚠️  CHECKSUM DRIFT - these migrations were edited after they were first applied:');
+      checksumDrift.forEach((f) => console.warn(`     ! ${f}`));
+      console.warn('   A rebuilt database will NOT reproduce the schema that was backed up.');
+      console.warn('   Migrations are append-only by policy; correct this with a NEW migration.');
     }
 
     if (Object.keys(SUPERSEDED).length) {
@@ -200,4 +293,27 @@ async function runMigration() {
   }
 }
 
-runMigration();
+/**
+ * SEC-21.2: run only when invoked directly (`npm run migrate`), not when
+ * imported.
+ *
+ * The restore verifier needs the SCHEDULE - it is the source of truth for what
+ * a correctly restored database must contain - and before this guard, importing
+ * this file to read it would have connected to a database and applied 33
+ * migrations as a side effect. That is a footgun in normal use and an actively
+ * dangerous one in the recovery tooling, where the whole point is to INSPECT a
+ * database without changing it.
+ */
+if (require.main === module) {
+  runMigration();
+}
+
+module.exports = {
+  MIGRATIONS,
+  SUPERSEDED,
+  LEDGER_MIGRATION,
+  checksumOf,
+  assertScheduleIsComplete,
+  /** Every migration file the repository intends a database to have received. */
+  allMigrationFiles: () => [LEDGER_MIGRATION, ...MIGRATIONS],
+};

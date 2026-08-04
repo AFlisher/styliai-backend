@@ -110,6 +110,44 @@ statement timeout. Same convention as the rate-limiter overrides above.
 > will start cancelling legitimate admin aggregates (give those headroom via
 > `DB_ANALYTICS_STATEMENT_TIMEOUT_MS` instead).
 
+### Disaster recovery (Phase 9)
+
+Full procedures live in **`DISASTER_RECOVERY.md`** (runbook, RPO/RTO, restore
+steps) and **`RELEASE.md`** (versioning, rollback). These are the variables they
+use.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `BACKUP_DIR` | Where `npm run backup:db` writes dumps and manifests | `./backups` |
+| `STORAGE_BACKUP_DIR` | Where `npm run backup:storage` writes objects and its manifest | `./backups/storage` |
+| `BACKUP_BUCKETS` | Comma-separated buckets to back up | `creations,style-images,avatars` |
+
+`PGUSER`, `PGPASSWORD`, `PGHOST`, `PGPORT`, `PGDATABASE` and `PGSSLMODE` are
+**not configured by you** — `backup:db` derives them from `DATABASE_URL` and
+passes them to `pg_dump` in its environment. That indirection is deliberate:
+passing a connection string in argv would expose the database password to every
+other user on the host via the process list, for the whole duration of the dump.
+`PGSSLMODE` defaults to `require` rather than libpq's `prefer`, because `prefer`
+silently falls back to an unencrypted connection and a backup is the largest
+bulk transfer of user data this system performs.
+
+**Operational notes:**
+
+- **`pg_dump` is a prerequisite and is currently NOT installed** on the operator
+  workstation (verified). `npm run backup:db` detects this and says so rather
+  than failing cryptically — but it cannot back up without it.
+  Install: `winget install PostgreSQL.PostgreSQL` / `apt install postgresql-client`.
+- **`npm run verify:restore` is read-only** and safe to point at production; "is
+  the live schema complete?" is the same question it answers about a restore.
+- **Restore is deliberately not automated.** A script that can overwrite a
+  database eventually overwrites the wrong one, so the destructive step requires
+  a human to type the target. See `DISASTER_RECOVERY.md` §3.
+- **The database and storage backups are ONE recovery unit.** A database restore
+  does not restore Supabase Storage; restoring only the database gives you
+  creation rows pointing at objects that no longer exist.
+- **There is no scheduler** (SEC-20.x). These commands must be driven by an
+  external cron, a CI schedule, or a human.
+
 ### Abuse detection and signup controls (Phase 8)
 
 > **The two settings that matter most are `IP_HASH_SALT` and `ABUSE_AUTO_SUSPEND`.**
