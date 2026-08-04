@@ -1,10 +1,101 @@
 # StyliAI — QA Execution Report
 
+**Latest run:** 2026-08-04
+**Previous run:** 2026-07-30 (backend + client only)
+**Original run:** 2026-07-15 (preserved below)
+**Source of truth:** [`QA_TEST_PLAN.md`](QA_TEST_PLAN.md)
+**Scope:** Execute every automatable test; mark the rest as manual or external.
+
+---
+
+## Headline — 2026-08-04
+
+Every figure below was produced by executing the suites on 2026-08-04, not carried forward.
+
+| Metric | Value |
+|--------|-------|
+| **Total automated tests** | **2,177** (1,717 backend + 391 Flutter + 69 admin dashboard) |
+| **Total suites** | **153** (103 backend + 41 Flutter files + 9 dashboard files) |
+| **Pass rate** | **100%** (2,177 / 2,177) |
+| **Failures / skipped** | 0 / 0 |
+| **Backend wall time** | ~9 s |
+| **Flutter wall time** | ~18 s |
+| **Dashboard wall time** | ~4 s |
+| **Coverage** | **Not measured** — no coverage tooling is configured in any of the three repositories. See §Known limitations. |
+
+Growth since the original run: **+1,731 tests (4.9×)** and **+105 suites**, almost entirely from the security remediation programme, where each closed finding that could silently regress was pinned by a test.
+
+**What changed since 2026-07-30:** no test was added, removed or altered — the backend and Flutter numbers reproduced exactly (103 / 1,717 and 391). The difference is that the **admin dashboard's suite is counted for the first time**. It has existed for some time; every prior headline in this file described two repositories out of three and was therefore complete for what it measured and incomplete for the project.
+
+### Backend breakdown
+
+| Location | Suites | Tests |
+|---|---|---|
+| `src/**/__tests__/` | 78 | 1,207 |
+| `test/critical/` | 8 | 77 |
+| `test/high/` | 6 | 71 |
+| `test/medium/` | 6 | 302 |
+| `test/feature/` | 5 | 60 |
+| **Total** | **103** | **1,717** |
+
+`test/manual/` and `test/mocks/` contain no test suites — a manual script and a `uuid` ESM shim respectively.
+
+### Flutter breakdown
+
+41 test files / 391 tests across `services` (8 files), `data` (7), `widgets` (6), `screens` (10 across auth, home, profile, upload, preview, creations), `utils` (3), `models` (2), `regression` (1) and `android` (1).
+
+### Admin dashboard breakdown
+
+9 test files / 69 tests (Vitest 4 + Testing Library): `src/__tests__/AppTabGating`, `src/utils/__tests__/adminRoles`, `src/pages/__tests__/` (LoginPage, StyleManagerPage, GenerationAnalyticsPage, UsersByCountryPage) and `src/components/__tests__/` (FieldsEditor, ImageUploader, PromptPreview).
+
+> ⚠ **Measured with `npx vitest run --dir src`.** Bare `npm test` in `admin_dashboard` reports **19 files / 127 tests** on this machine because Vitest's include pattern is not scoped to `src` and it also collects the duplicated copies inside `admin_dashboard/.claude/worktrees/`. All 127 pass, but the count varies with which local worktrees happen to exist, so it is not a property of the code. Backend Jest is immune to this — its `roots` are pinned. Scoping the Vitest config would fix it and is a code change, deliberately not made by this documentation pass.
+
+### Execution environment
+
+| | |
+|---|---|
+| **Backend** | Node 24.18.0 · Jest 30.4.2 · Supertest 7.2.2 · `testEnvironment: node` |
+| **Client** | Flutter 3.44.4 stable · Dart `>=3.2.0 <4.0.0` |
+| **Dashboard** | Vitest 4.1.10 + Testing Library · jsdom environment |
+| **Database** | **Mocked.** No suite requires a live database or writes to production. |
+| **Supabase / AI providers / email** | Mocked at the module boundary |
+| **Platform** | Windows 11, local developer machine |
+| **CI** | GitHub Actions runs **gitleaks secret scanning only** on all three repositories. **The test suites do not run in CI** — they are executed locally before push. |
+
+### How the suites are run
+
+```bash
+cd backend         && npm test                    # 103 suites / 1,717 tests
+cd prompt_app      && flutter test                # 41 files   /   391 tests
+cd admin_dashboard && npx vitest run --dir src    #  9 files   /    69 tests
+```
+
+Jest's `roots` are pinned to `src` and `test`, so a linked git worktree cannot inflate the backend's discovered suite count — that number is deterministic regardless of which checkout it runs from. The dashboard's Vitest config has no equivalent scoping, which is why `--dir src` appears above instead of `npm test`.
+
+---
+
+## Known limitations (2026-08-04)
+
+Stated plainly, because a 100% pass rate on 2,177 tests can read as more assurance than it is:
+
+1. **No coverage measurement.** None of the three repositories configures `--coverage` or a threshold gate. Test *count* is a measure of volume, not of coverage; no percentage is claimed anywhere in this project.
+2. **The test suites do not run in CI.** Only secret scanning does. A push whose tests were never run locally would not be caught.
+3. **The database is mocked everywhere.** Real SQL behaviour — constraints, triggers, transaction semantics, RLS — is not exercised by the automated suites. RLS was verified separately by owner-run live probes (SEC-10.1), not by these tests.
+4. **No load, stress, performance or soak testing has been executed.** Plan sections §6–§8 remain unimplemented.
+5. **No end-to-end test on a real device.** Certificate pinning, network security config, root detection and Play Integrity each require hardware or an external console; they are listed as manual in the plan and remain unverified in that sense.
+6. **No accessibility or localization automation.** Plan §12–§13 are unimplemented; Arabic/RTL is verified by eye.
+7. **Backup restore has never been drilled** — there are no backups to drill (SEC-21.1/21.2/21.3).
+8. **Flutter widget tests assert structure, not rendering.** Screenshot protection, for example, is asserted by widget presence and reference-count behaviour, not by inspecting a captured frame.
+9. **The dashboard's suite count is environment-dependent.** `npm test` there collects any `.claude/worktrees/` copies alongside `src`, so the reported file/test count changes with the local working tree. Use `--dir src` for a reproducible figure (see §Admin dashboard breakdown).
+
+---
+
+<details>
+<summary><strong>Original run — 2026-07-15 (preserved verbatim)</strong></summary>
+
 **Date:** 2026-07-15
 **Source of truth:** `QA_TEST_PLAN.md`
 **Scope:** Implement and execute every automatable test in the plan; mark the rest as manual or external.
-
----
 
 ## Headline
 
@@ -17,6 +108,8 @@
 | **Application behavior changes required by this QA phase** | 0 |
 
 Backend runs on Jest + Supertest against the **real Express app** (routes, middleware, controllers, models, wallet service) with only the storage layer (in-memory Postgres double) and external services faked. Flutter runs on `flutter_test`.
+
+> **Everything from here to the end of the file is the 2026-07-15 report, preserved verbatim.** Its counts (36 suites / 336 tests, 12 suites / 110 tests) and its readiness assessment describe the project as it was on that date and are **superseded** by the 2026-07-30 headline above. It is retained because it records the two real defects the original QA phase found, and the manual/external gates it identified — several of which are still open.
 
 ---
 
@@ -98,3 +191,5 @@ Everything else flagged during test development was a test-harness issue (fixed 
 5. **Accessibility, Localization/RTL, and UAT** manual passes.
 
 Recommendation: **conditionally ready** — ship-ready on application correctness and security logic; complete the five external/manual gates above (RLS audit and load/resilience being the critical two) before general availability.
+
+</details>

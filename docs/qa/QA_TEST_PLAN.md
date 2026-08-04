@@ -1,9 +1,96 @@
 # StyliAI — Production QA Test Plan
 
 **Author:** QA Engineering
-**Version:** 1.0
-**Date:** 2026-07-15
-**Status:** Planning (no tests executed)
+**Version:** 2.0
+**Date:** 2026-07-15 · **Revised 2026-07-30** · **Third repository added 2026-08-04**
+**Status:** Active — automated suites implemented and passing (**2,177 tests**: 1,717 backend + 391 Flutter + 69 admin dashboard)
+
+---
+
+## 0. Current testing strategy (2026-07-30)
+
+> **§1–§17 below are the original 2026-07-15 plan and are preserved unchanged.** They remain the definition of *what should be covered*. This section describes what is actually implemented and how it is organised, which changed substantially during the security remediation programme.
+
+### 0.1 Where the tests live
+
+| Location | Suites | Tests | Purpose |
+|---|---|---|---|
+| `backend/src/**/__tests__/` | 78 | 1,207 | Unit and integration, colocated with the code they cover. Security suites drive the **real app** via `supertest`. |
+| `backend/test/critical/` | 8 | 77 | Release blockers: money, auth, data integrity |
+| `backend/test/high/` | 6 | 71 | Core journeys |
+| `backend/test/medium/` | 6 | 302 | Broad surface, incl. a generated per-file secret scan |
+| `backend/test/feature/` | 5 | 60 | Feature-level behaviour |
+| `backend/test/manual/` | — | — | Scripts requiring human judgement; not run by `npm test` |
+| `prompt_app/test/` | 41 files | 391 | Services, data managers, widgets, screens, utils, models, regression |
+| `admin_dashboard/src/**/__tests__/` | 9 files | 69 | Vitest + Testing Library: tab gating, admin RBAC helpers, login, style manager, analytics pages, uploader/fields/prompt-preview components |
+| **Total** | **153** | **2,177** | |
+
+Run with `npm test` (backend), `flutter test` (client) and `npm test` (dashboard).
+
+> ⚠ **The dashboard row is measured with `npx vitest run --dir src`, not with `npm test`.** Jest's `roots` are pinned to `src` and `test`, so a linked git worktree cannot inflate the backend count — the dashboard's Vitest config has **no equivalent scoping**. On a checkout that has worktrees under `admin_dashboard/.claude/worktrees/`, bare `npm test` collects the duplicated copies too and reports **19 files / 127 tests**. The suite still passes either way, but the number is a function of the local working tree rather than of the code, so `--dir src` is the reproducible figure and the one recorded above. Scoping the Vitest config is a code change and is tracked, not applied here.
+
+**The dashboard suite was absent from this table until 2026-08-04.** Earlier revisions counted two repositories and reported 144 suites / 2,108 tests; the totals above are the first that cover all three.
+
+### 0.2 Backend testing
+
+- **Integration over unit for anything security-relevant.** Auth, rate limiting, upload validation and delivery are asserted through `supertest` against `src/app.js`, because most of what they enforce lives in **middleware ordering** — a handler-level unit test cannot see it. Several suites assert order structurally (e.g. auth must precede the identity-keyed limiter, and precede multer).
+- **Real bytes for image paths.** Upload and sanitisation suites build genuine JPEG/PNG/WebP/animated-GIF fixtures with `sharp` rather than using placeholder buffers, because the controls being tested are decoders.
+- **The database and Supabase are mocked**; no suite requires a live database, and none writes to production.
+
+### 0.3 Flutter testing
+
+- **Widget tests drive the shipped widget.** Platform behaviour is faked at the platform-interface seam (`ImagePickerPlatform.instance`, `SecureScreen.applyOverride`) rather than by adding test hooks to production screens.
+- **Source-level invariants** are asserted where behaviour cannot be: e.g. that no `storage.from(` call exists anywhere in `lib/`, and that screenshot protection is applied to the sensitive screens and *absent* from the ones users legitimately screenshot.
+
+### 0.4 Security regression testing
+
+Every closed security finding that could silently regress has a test pinning it. Notable examples:
+
+| Control | Pinned by |
+|---|---|
+| Account-recovery tokens never reach logs (SEC-16.1) | `src/__tests__/requestLogRedaction.test.js` |
+| Admin RBAC across every guarded route (SEC-15.4) | `src/__tests__/adminRoleMatrix.test.js` — full route × role cross-product, driven from the policy table |
+| Structured logging, correlation ids, health, metrics | `src/__tests__/observability.test.js` |
+| Avatar upload rejects non-images (R-2) | `src/__tests__/avatarUpload.test.js` |
+| Avatar delivery authorizes and cannot enumerate (R-2) | `src/__tests__/avatarDelivery.test.js` |
+| Reference guard survives encoding **and** query strings (SEC-8.4 / 8.4B) | `creationAssetCleanup.encoding` + `.queryString` |
+| No secret is committed; every env var is documented | `src/__tests__/configHardening.test.js` |
+| Rate limits are endpoint-specific and overrides fail safe | `middleware/__tests__/rateLimiters.phase6.test.js` |
+| Release logging silenced; screenshot protection scoped | `prompt_app/test/utils/release_hardening_test.dart` |
+
+### 0.5 Vacuity probes — a required step, not a nicety
+
+**After writing a test, break the control it covers and confirm the test fails.** This is applied to every security control shipped in this project, and it has repeatedly found tests that passed with their control removed:
+
+- An HTML-upload rejection test that passed with magic-byte verification disabled (a later decode failure satisfied it) → strengthened to assert *which layer* refused.
+- A rate-limiter test asserting only "different from the generic limiter" → satisfied by any number; strengthened to assert a strictly tighter limit **and** longer window.
+- An env-var documentation test satisfied by a mention anywhere → re-probed against a variable with a single mention.
+- A Flutter screenshot test that passed when the picker silently returned nothing → an explicit "the sheet opened" assertion added.
+
+Where a probe reveals a weak test, the strengthening is documented **at the assertion**, so the reason survives.
+
+### 0.6 Manual verification
+
+Not automatable in this repository; each requires hardware or an external console:
+
+| Item | Why manual | Tracked as |
+|---|---|---|
+| Certificate pinning against real Railway TLS | Needs a physical Android device | SEC-12.1 |
+| Network security config on a release build | Needs a device; debug behaves differently | SEC-12.2 |
+| Root-detection warning (clean + rooted device) | Needs two devices | SEC-13.4 |
+| Play Integrity real verdict | Needs Play Console + Cloud project | SEC-0.x |
+| Backup restore drill | No backups exist yet | SEC-21.2 |
+| Google Play / App Store submission gates | External consoles | `LEGAL_REQUIREMENTS.md` |
+
+### 0.7 Release validation
+
+**Backend** — see `backend/SECURITY_OPERATIONS.md` §1. Post-deploy: `/healthz` 200, `/readyz` both checks true, `/api/creations` 401, every error response carries `X-Request-Id`.
+
+**Client** — see `prompt_app/RELEASE.md` §2. Includes: built with `--obfuscate --split-debug-info --extra-gen-snapshot-options=--strip`; symbols archived; `adb logcat` shows no app debug output; sensitive screens block screenshots while a generated image does not.
+
+### 0.8 Coverage
+
+**No coverage tooling is configured** in either repository — there is no `--coverage` setup, no threshold gate, and therefore **no coverage percentage is claimed anywhere.** Test counts are a measure of volume, not of coverage. Adding `jest --coverage` with a floor is an open improvement, not a completed one.
 
 ---
 

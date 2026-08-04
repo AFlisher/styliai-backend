@@ -1,5 +1,16 @@
 # Full Application Security Audit — 2026-07-15
 
+> ### 🕐 Historical snapshot — superseded (banner added 2026-08-04)
+>
+> This 2026-07-15 audit was **replaced on 2026-07-24/25** by the 24-section, 94-finding audit in [`../../../SECURITY_REPORT.md`](../../../SECURITY_REPORT.md), whose Sections 0–15 are a frozen baseline. It is kept because it records the closure of the Phase 1 endpoint findings and the healthy-by-verification list below, both of which the later audit builds on rather than repeats. Its severity language predates the SEC-ID scheme and does not map onto it.
+>
+> | For | Read |
+> |---|---|
+> | Findings, evidence, severities | [`../../../SECURITY_REPORT.md`](../../../SECURITY_REPORT.md) |
+> | Current status per finding, with commits | [`../../../SECURITY_FIXES.md`](../../../SECURITY_FIXES.md) |
+> | What remains, in order | [`../../../REMEDIATION_ROADMAP_V2.md`](../../../REMEDIATION_ROADMAP_V2.md) |
+> | Operating the shipped controls | [`../../SECURITY_OPERATIONS.md`](../../SECURITY_OPERATIONS.md) |
+
 **Scope:** `backend/` (Express API), `admin_dashboard/` (React/Vite), `prompt_app/` (Flutter). Verified directly against source. No code was modified.
 
 ## Status of the Phase 1 endpoint audit (2026-07-11)
