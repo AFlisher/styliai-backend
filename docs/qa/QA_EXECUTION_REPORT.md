@@ -14,18 +14,24 @@ Every figure below was produced by executing the suites on 2026-08-04, not carri
 
 | Metric | Value |
 |--------|-------|
-| **Total automated tests** | **2,177** (1,717 backend + 391 Flutter + 69 admin dashboard) |
+| **Total automated tests** | **2,178** (1,718 backend + 391 Flutter + 69 admin dashboard) |
 | **Total suites** | **153** (103 backend + 41 Flutter files + 9 dashboard files) |
-| **Pass rate** | **100%** (2,177 / 2,177) |
+| **Pass rate** | **100%** (2,178 / 2,178) |
 | **Failures / skipped** | 0 / 0 |
 | **Backend wall time** | ~9 s |
 | **Flutter wall time** | ~18 s |
 | **Dashboard wall time** | ~4 s |
 | **Coverage** | **Not measured** — no coverage tooling is configured in any of the three repositories. See §Known limitations. |
 
-Growth since the original run: **+1,731 tests (4.9×)** and **+105 suites**, almost entirely from the security remediation programme, where each closed finding that could silently regress was pinned by a test.
+Growth since the original run: **+1,732 tests (4.9×)** and **+105 suites**, almost entirely from the security remediation programme, where each closed finding that could silently regress was pinned by a test.
 
-**What changed since 2026-07-30:** no test was added, removed or altered — the backend and Flutter numbers reproduced exactly (103 / 1,717 and 391). The difference is that the **admin dashboard's suite is counted for the first time**. It has existed for some time; every prior headline in this file described two repositories out of three and was therefore complete for what it measured and incomplete for the project.
+**What changed since 2026-07-30:** the **admin dashboard's suite is counted for the first time** — it has existed for some time, but every prior headline in this file described two repositories out of three. The Flutter count reproduced exactly (391). Backend moved 1,717 → 1,718 for the reason below.
+
+> ### Why the backend count moves when no test is written
+>
+> `test/medium/secrets.medium.test.js` generates **one test per git-tracked file** (`git ls-files`, 264 today) to assert no hardcoded secret is present. **Adding any tracked file of any type adds a test.** The 1,717 → 1,718 change between the two runs on 2026-08-04 is exactly this: `backend/README.md` was committed between them, taking tracked files from 263 to 264. No test was written, and `test/medium` moved 302 → 303 accordingly.
+>
+> This is worth knowing before treating a changed total as meaningful: the backend figure is a function of the repository's file count as well as its test count.
 
 ### Backend breakdown
 
@@ -34,9 +40,9 @@ Growth since the original run: **+1,731 tests (4.9×)** and **+105 suites**, alm
 | `src/**/__tests__/` | 78 | 1,207 |
 | `test/critical/` | 8 | 77 |
 | `test/high/` | 6 | 71 |
-| `test/medium/` | 6 | 302 |
+| `test/medium/` | 6 | 303 |
 | `test/feature/` | 5 | 60 |
-| **Total** | **103** | **1,717** |
+| **Total** | **103** | **1,718** |
 
 `test/manual/` and `test/mocks/` contain no test suites — a manual script and a `uuid` ESM shim respectively.
 
@@ -65,7 +71,7 @@ Growth since the original run: **+1,731 tests (4.9×)** and **+105 suites**, alm
 ### How the suites are run
 
 ```bash
-cd backend         && npm test                    # 103 suites / 1,717 tests
+cd backend         && npm test                    # 103 suites / 1,718 tests
 cd prompt_app      && flutter test                # 41 files   /   391 tests
 cd admin_dashboard && npx vitest run --dir src    #  9 files   /    69 tests
 ```
@@ -76,7 +82,7 @@ Jest's `roots` are pinned to `src` and `test`, so a linked git worktree cannot i
 
 ## Known limitations (2026-08-04)
 
-Stated plainly, because a 100% pass rate on 2,177 tests can read as more assurance than it is:
+Stated plainly, because a 100% pass rate on 2,178 tests can read as more assurance than it is:
 
 1. **No coverage measurement.** None of the three repositories configures `--coverage` or a threshold gate. Test *count* is a measure of volume, not of coverage; no percentage is claimed anywhere in this project.
 2. **The test suites do not run in CI.** Only secret scanning does. A push whose tests were never run locally would not be caught.

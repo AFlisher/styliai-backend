@@ -3,7 +3,7 @@
 **Author:** QA Engineering
 **Version:** 2.0
 **Date:** 2026-07-15 · **Revised 2026-07-30** · **Third repository added 2026-08-04**
-**Status:** Active — automated suites implemented and passing (**2,177 tests**: 1,717 backend + 391 Flutter + 69 admin dashboard)
+**Status:** Active — automated suites implemented and passing (**2,178 tests**: 1,718 backend + 391 Flutter + 69 admin dashboard)
 
 ---
 
@@ -18,12 +18,12 @@
 | `backend/src/**/__tests__/` | 78 | 1,207 | Unit and integration, colocated with the code they cover. Security suites drive the **real app** via `supertest`. |
 | `backend/test/critical/` | 8 | 77 | Release blockers: money, auth, data integrity |
 | `backend/test/high/` | 6 | 71 | Core journeys |
-| `backend/test/medium/` | 6 | 302 | Broad surface, incl. a generated per-file secret scan |
+| `backend/test/medium/` | 6 | 303 | Broad surface, incl. a generated per-file secret scan |
 | `backend/test/feature/` | 5 | 60 | Feature-level behaviour |
 | `backend/test/manual/` | — | — | Scripts requiring human judgement; not run by `npm test` |
 | `prompt_app/test/` | 41 files | 391 | Services, data managers, widgets, screens, utils, models, regression |
 | `admin_dashboard/src/**/__tests__/` | 9 files | 69 | Vitest + Testing Library: tab gating, admin RBAC helpers, login, style manager, analytics pages, uploader/fields/prompt-preview components |
-| **Total** | **153** | **2,177** | |
+| **Total** | **153** | **2,178** | |
 
 Run with `npm test` (backend), `flutter test` (client) and `npm test` (dashboard).
 

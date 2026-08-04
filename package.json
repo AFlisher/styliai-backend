@@ -4,6 +4,7 @@
   "description": "Custom authentication backend for StyliAI",
   "main": "server.js",
   "scripts": {
+    "migrate": "node src/utils/runMigration.js",
     "create-admin": "node src/utils/createAdmin.js",
     "backfill-thumbnails": "node src/utils/backfillThumbnails.js",
     "reconcile-creations": "node src/utils/reconcileOrphanedCreations.js",

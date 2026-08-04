@@ -76,14 +76,22 @@ Two boot-time behaviours worth knowing:
 Migrations are plain `.sql` files in the repository root (**32 of them**). There is no migration framework, no ledger table, and no down-migrations.
 
 ```bash
-node src/utils/runMigration.js
+npm run migrate
 ```
 
-> ### ⚠ The migration runner cannot rebuild the schema from scratch
+`runMigration.js` holds an explicit, **dependency-ordered** schedule: 30 files to apply and 2 marked superseded with the reason. Before connecting to anything it diffs that schedule against the directory and **exits 1** if they disagree — an unlisted file, a scheduled file that is missing, a duplicate, or a file in both lists. Adding a migration without scheduling it is therefore a hard failure, not a silent omission.
+
+> ### ⚠ Do not sort the schedule alphabetically
 >
-> `runMigration.js` applies a **hard-coded list of 18 files**, not all 32. Migrations added later — including `migration_admin_roles.sql`, `migration_admin_mfa.sql`, `migration_admin_audit_log.sql`, `migration_login_lockout.sql`, `migration_integrity_verdicts.sql`, `migration_storage_avatars.sql` and others — are **not** in that list and must be applied by hand.
->
-> This is tracked as **SEC-21.1** and is the single biggest disaster-recovery gap in the project: a rebuild from an empty database will silently produce an incomplete schema. Apply new migrations manually against the target database and treat the runner as a bootstrap helper, not a source of truth.
+> The order in `MIGRATIONS` is the order these migrations were written and applied, and it encodes real dependencies. Alphabetically, `migration_admin_audit_log.sql` sorts **29 places before** `migration_wallet_ledger.sql`, so its `ALTER TABLE wallet_transactions ADD COLUMN admin_id` would run long before that table exists; `migration_auto_tags.sql` likewise sorts before `migration_catalog.sql`, which creates the `styles` table it reads. A glob-and-sort runner fails on a fresh database. **Append new migrations at the end; never reorder existing entries.**
+
+Three things the runner deliberately does not do:
+
+- **It is not transactional across files.** A mid-run failure leaves the database partially migrated; the error message says so, names the file, and reports how many applied. Every migration is guarded (`IF NOT EXISTS`, `DO $$` blocks), so re-running after a fix is a no-op for everything that already succeeded.
+- **It does not track what has run.** There is no ledger table — idempotency comes from the guards, not from bookkeeping.
+- **It does not provision Supabase Storage.** No migration creates the `creations`, `avatars` or `style-images` buckets. **A rebuilt database is not by itself a rebuilt system** — this remains part of **SEC-21.1**.
+
+> **History:** until 2026-08-04 the runner applied a hand-maintained list of **18 of the 32** files, and nothing failed when the other 14 were added without being listed. A fresh database was missing the columns `POST /api/auth/register` inserts into (`verification_token_hash`, `country_code`, `country_name`), the entire admin security layer (roles, MFA, audit log, lockout), and every `ENABLE ROW LEVEL SECURITY` statement in the repository. The runner also swallowed errors — it logged a failure and exited **0**. Both are fixed; the completeness check is what prevents a recurrence.
 
 **Convention used throughout this project:** a migration is written *and immediately applied* to the live database in the same change. There is no "pending migrations" state.
 
@@ -111,6 +119,7 @@ All are safe by default; the destructive ones are dry-run unless told otherwise.
 
 | Command | What it does |
 |---|---|
+| `npm run migrate` | Apply the migration schedule — fails fast if it has drifted from the directory |
 | `npm run create-admin` | Provision an admin account |
 | `npm run reconcile-creations` | Find (and with `--delete`, remove) orphaned creation objects — **dry-run by default** |
 | `npm run reconcile-avatars` | Same, for avatars — **dry-run by default** |
@@ -148,7 +157,7 @@ npx jest test/critical         # release-blocker tier
 npx jest -t "avatar"           # by name
 ```
 
-**103 suites · 1,717 tests**, all passing (re-run 2026-08-04). Across all three repositories the project totals **153 suites · 2,177 tests**. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
+**103 suites · 1,718 tests**, all passing (re-run 2026-08-04). Across all three repositories the project totals **153 suites · 2,178 tests**. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
 
 Two conventions worth adopting before adding tests:
 
