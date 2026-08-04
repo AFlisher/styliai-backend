@@ -73,8 +73,29 @@ Values are **never** recorded here. Development values are what a local
 | `STABILITY_GENERATION_COST` | Credit cost | see config |
 | `ENABLE_CLIENT_AD_REWARD` | Client-side ad reward path | off |
 | `ADMIN_JWT_EXPIRES_IN` | Admin token lifetime | see config |
+| `REFRESH_TOKEN_TTL_DAYS` | Refresh-token lifetime, Phase 6 (SEC-1.4). Sets both the JWT `exp` and the `refresh_tokens.expires_at` row | **14** (was 30 pre-Phase-6) |
 | `GEMINI_MODEL` | Generation model id | see config |
 | `RATE_LIMIT_<LIMITER>_LIMIT` / `_WINDOW_MS` | Per-limiter override (§6) | Built-in defaults |
+
+### Session revocation and account suspension (Phase 6)
+
+**Everything below takes effect on the user's NEXT request**, not at their next login — that is the point of the phase.
+
+| Task | How |
+|---|---|
+| Suspend an account | `POST /api/admin/users/:id/suspend` (superadmin). Body: `{"status":"suspended"\|"banned","reason":"..."}`. Bumps `token_version`, revokes every refresh family. |
+| Reinstate | `POST /api/admin/users/:id/reinstate` (superadmin). Also bumps the epoch, so the user signs in fresh. |
+| Force-logout one user | Suspend then reinstate, or `UPDATE public.users SET token_version = token_version + 1 WHERE id = ...`. |
+| Revoke an admin's dashboard token | `UPDATE admins SET token_version = token_version + 1 WHERE id = ...`. Takes effect immediately; the admin re-logs in. |
+| User self-service | `POST /api/auth/logout-all` — signs the caller out of every device **including the one calling**. |
+| Prune dead refresh rows | `sessionService.purgeDeadRefreshTokens()` from an operator shell. Retention only; expired and revoked rows are already refused. |
+
+**Two failure modes worth knowing before an incident:**
+
+- **`authMiddleware` fails CLOSED.** If the session-state read throws, it answers **503**, not 401 and not success. A database outage therefore looks like an outage rather than silently restoring every revoked and suspended session. `/readyz` reports the same condition.
+- **`optionalAdminAuth` fails open as *anonymous*, never as admin.** A blip on the `admins` table degrades a dashboard user to the public response on shared catalog reads; it never grants privilege.
+
+**Log lines to alert on** (`event` field): `refresh_token_reuse_detected` — a refresh token was presented twice, meaning two parties held it. This is the strongest available signal of a stolen session and always revokes the family. Also `token_version_mismatch` in volume (a client not handling `SESSION_REVOKED`) and `account_not_active`.
 
 ### Auto-tagging (offline catalog tooling)
 
