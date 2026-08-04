@@ -10,6 +10,7 @@ const { logger } = require('./utils/logger');
 const { logUnexpectedError, logValidationFailure } = require('./utils/securityEvents');
 const { globalLimiter } = require('./middleware/rateLimiters');
 const { toClientError } = require('./middleware/validateRequest');
+const abuseDetection = require('./services/abuse/abuseDetection');
 
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
@@ -213,6 +214,24 @@ app.get('/readyz', healthController.readyz);
 // headroom over the highest of them, which means this limiter can only ever
 // fire on a path that no other limiter is governing. See rateLimiters.js.
 app.use(globalLimiter);
+
+// SEC-18.1 (Phase 8): opportunistic detection trigger.
+//
+// There is no scheduler in this codebase (SEC-20.x), so the abuse sweep
+// piggybacks on request traffic, exactly as integrityLedgerSweeper already
+// does. It is mounted here - once, above the route table - rather than on the
+// generation or wallet routes, because detection that only runs when the abuse
+// surface is busy is detection that goes quiet during the period a farmer is
+// only registering accounts.
+//
+// The call is O(1) when gated: two synchronous comparisons and a return. It is
+// never awaited, always carries a .catch() inside the service, and is disabled
+// under NODE_ENV=test (see config/abusePolicy.js for why that is correctness
+// rather than convenience).
+app.use((req, _res, next) => {
+  abuseDetection.maybeSweep();
+  next();
+});
 
 // Routes
 app.use('/api/auth', authRoutes);

@@ -70,6 +70,24 @@ const ADMIN_ROUTE_POLICY = Object.freeze({
   // -feeling actions against a specific, identified user.
   "POST /api/admin/users/:id/suspend": "superadmin",
   "POST /api/admin/users/:id/reinstate": "superadmin",
+
+  // SEC-18.1 (Phase 8): the abuse review workflow.
+  //
+  // The two READS are viewer-tier on purpose. A review queue that only a
+  // superadmin can look at is a queue nobody looks at, and the whole finding is
+  // that nothing was watching. Neither read discloses more than the admin
+  // surface already does: findings carry counts and thresholds, and the session
+  // list carries origin HASHES, never addresses.
+  "GET /api/admin/abuse/findings": "viewer",
+  "GET /api/admin/abuse/risk": "viewer",
+  // The session list is scoped to one named user, which puts it with the other
+  // per-user lookups rather than with the aggregate views.
+  "GET /api/admin/abuse/users/:id/sessions": "superadmin",
+  // Both WRITES are superadmin: a recorded verdict is what future threshold
+  // changes get argued from, and a manual sweep can suspend accounts when
+  // automatic enforcement is enabled.
+  "POST /api/admin/abuse/findings/:id/review": "superadmin",
+  "POST /api/admin/abuse/sweep": "superadmin",
   "POST /api/credit-packs": "superadmin",
   "PUT /api/credit-packs/:id": "superadmin",
   "DELETE /api/credit-packs/:id": "superadmin",

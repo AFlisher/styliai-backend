@@ -6,7 +6,9 @@ const adminGenerationAnalyticsController = require("../controllers/adminGenerati
 const stabilityController = require("../controllers/stabilityController");
 const adminAuthMiddleware = require("../middleware/adminAuthMiddleware");
 const { requireAdminRoleFor } = require("../middleware/requireAdminRole");
+const abuseController = require("../controllers/abuseController");
 const { adminLoginLimiter, adminActionLimiter, adminGenerationPreviewLimiter } = require("../middleware/rateLimiters");
+const { uuidParams } = require("../middleware/validateRequest");
 
 const router = express.Router();
 
@@ -32,6 +34,23 @@ router.post("/users/:id/adjust-balance", adminActionLimiter, adminAuthMiddleware
 // lookup rather than with catalog authoring.
 router.post("/users/:id/suspend", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/suspend"), adminController.suspendUser);
 router.post("/users/:id/reinstate", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/reinstate"), adminController.reinstateUser);
+
+// SEC-18.1 (Phase 8): the abuse review workflow.
+//
+// Read-and-review only. Enforcement stays on the two Phase 6 endpoints above,
+// so there is exactly ONE way to suspend an account whether a human or a
+// detector decided it - a second path would be a second definition of what
+// "suspended" means, only one of which authMiddleware was written against.
+//
+// Tiers live in config/adminRoutePolicy.js, not here: the read endpoints are
+// available to any admin (looking at a review queue is what the queue is for),
+// while running a sweep and recording a verdict are superadmin, because both
+// write state that later threshold decisions get argued from.
+router.get("/abuse/findings", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/abuse/findings"), abuseController.listFindings);
+router.get("/abuse/risk", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/abuse/risk"), abuseController.topRisk);
+router.get("/abuse/users/:id/sessions", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/abuse/users/:id/sessions"), uuidParams("id"), abuseController.userSessions);
+router.post("/abuse/findings/:id/review", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/abuse/findings/:id/review"), uuidParams("id"), abuseController.reviewFinding);
+router.post("/abuse/sweep", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/abuse/sweep"), abuseController.runSweepNow);
 
 // Admin-only Stability AI testing tool (Style Manager's "Test Prompt" modal).
 // No wallet charge, no creation-history write - see stabilityController for why.

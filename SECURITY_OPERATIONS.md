@@ -110,6 +110,34 @@ statement timeout. Same convention as the rate-limiter overrides above.
 > will start cancelling legitimate admin aggregates (give those headroom via
 > `DB_ANALYTICS_STATEMENT_TIMEOUT_MS` instead).
 
+### Abuse detection and signup controls (Phase 8)
+
+> **The two settings that matter most are `IP_HASH_SALT` and `ABUSE_AUTO_SUSPEND`.**
+> Everything else is a threshold.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `IP_HASH_SALT` | **HMAC key for the SEC-18.3 origin correlation key.** Must be ≥16 chars. **Unset ⇒ correlation is DISABLED** (logged once at boot) and multi-account detection degrades to country granularity — it is never silently faked with a random or constant key, because a per-boot salt would appear to work while grouping nothing, and a constant would make the hash reversible by enumerating the IPv4 space | *unset* — **set this to activate SEC-18.3** |
+| `ABUSE_AUTO_SUSPEND` | Arms **automatic** suspension. `false` ⇒ detectors flag and score, humans decide | **`false`** |
+| `ABUSE_SWEEP_ENABLED` | Whether the request-triggered sweep runs at all | `true` (`false` under `NODE_ENV=test`) |
+| `ABUSE_SWEEP_INTERVAL_MS` | Minimum gap between opportunistic sweeps | `900000` (15 min) |
+| `ABUSE_MAX_FINDINGS_PER_SWEEP` | Per-detector row cap, so a sweep can never become SEC-19.1's failure mode | `200` |
+| `ABUSE_REG_WINDOW_HOURS` / `ABUSE_REG_PER_ORIGIN` / `ABUSE_REG_PER_ORIGIN_HIGH` | Registration velocity per origin | `1` / `6` / `20` |
+| `ABUSE_GEN_WINDOW_HOURS` / `ABUSE_GEN_PER_USER` / `ABUSE_GEN_PER_USER_HIGH` | Generation velocity per user | `1` / `30` / `100` |
+| `ABUSE_WALLET_WINDOW_HOURS` / `ABUSE_REWARDS_PER_ORIGIN` / `ABUSE_REWARDS_PER_ORIGIN_HIGH` | Reward-farming accounts sharing one origin | `24` / `10` / `30` |
+| `ABUSE_ADMIN_ADJUSTMENTS` | Admin balance-adjustment volume in the window | `25` |
+| `ABUSE_SESSION_ORIGINS` / `ABUSE_SESSION_ORIGINS_HIGH` / `ABUSE_SESSION_WINDOW_HOURS` | Concurrent distinct session origins per account (SEC-18.5) | `3` / `6` / `24` |
+| `BLOCK_DISPOSABLE_EMAILS` | Reject throwaway email providers at signup | `true` |
+| `DISPOSABLE_EMAIL_DOMAINS` | Comma-separated domains appended to the built-in list | *unset* |
+| `TURNSTILE_SECRET_KEY` | Cloudflare Turnstile secret. **Unset ⇒ the CAPTCHA is entirely inert** (same posture as Play Integrity) | *unset* |
+
+**Operational notes that are not obvious from the table:**
+
+- **`IP_HASH_SALT` rotation IS the retention control.** Rotating it invalidates every stored origin hash at once, so correlation ability decays to zero with no data migration and no way to re-derive the old values. Rotate it if you want to forget origins; do not rotate it casually, because in-flight detection loses its join key.
+- **Automatic suspension is deliberately off.** Today a firing detector is more likely a false positive than an attack — the audit's own economics analysis (§18 Item 18.2) is that farming is currently self-limiting — and the cost of being wrong is locking a real user out of an account they watched ads to fund. Turn it on **after** watching what the detectors actually flag, and expect to tune thresholds first. Even when armed, only `high`-severity, **user-scoped** findings can act: the origin-scoped detectors (`registration_velocity`, `reward_farming_origin`) can never auto-suspend, because an origin implicates everyone behind a shared NAT.
+- **Rollback for any automatic suspension is `POST /api/admin/users/:id/reinstate`** (superadmin, Phase 6). Nothing about automatic enforcement is destructive: no data is deleted, no balance changes, and one existing endpoint fully restores the account.
+- **The alert drain is still missing.** Detectors emit structured `abuse_sweep` / `abuse_auto_suspend` events through the Phase 5 logging architecture, but there is nowhere for them to be *routed* until **SEC-16.5** lands. Until then, the review queue (`GET /api/admin/abuse/findings`) is the surface — it is pull, not push.
+
 ### Session revocation and account suspension (Phase 6)
 
 **Everything below takes effect on the user's NEXT request**, not at their next login — that is the point of the phase.

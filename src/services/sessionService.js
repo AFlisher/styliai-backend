@@ -85,14 +85,55 @@ async function bumpAdminTokenVersion(adminId, client = db) {
  * Records a newly issued refresh token. `familyId` omitted starts a new family
  * (a fresh login); passing one continues an existing rotation chain.
  */
-async function recordRefreshToken({ userId, token, familyId }, client = db) {
+/**
+ * SEC-18.5 (Phase 8): `originHash` and `deviceLabel` are additive and optional.
+ *
+ * This table already was the sessions table the audit asked for - one row per
+ * login, with a family_id, issued_at, used_at and revoked_at. What was missing
+ * is that nothing recorded WHERE a session came from, and nothing ever read the
+ * table as a concurrency signal. Two nullable columns close the first half;
+ * abuseDetection's concurrent-origin detector closes the second.
+ *
+ * Both parameters default to null so every existing caller - including the
+ * rotation path, which has no request context of its own - keeps working
+ * unchanged. A null origin means "unknown", never a group key.
+ */
+async function recordRefreshToken(
+  { userId, token, familyId, originHash = null, deviceLabel = null },
+  client = db
+) {
   const family = familyId || uuidv4();
   await client.query(
-    `INSERT INTO refresh_tokens (token_hash, user_id, family_id, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [hashToken(token), userId, family, refreshTokenExpiry()]
+    `INSERT INTO refresh_tokens (token_hash, user_id, family_id, expires_at, origin_hash, device_label)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [hashToken(token), userId, family, refreshTokenExpiry(), originHash, deviceLabel]
   );
   return family;
+}
+
+/**
+ * SEC-18.5 - the live sessions for one account, newest first.
+ *
+ * Reads the table Phase 6 already maintains as a session list. Never returns
+ * token_hash: the caller is a detector or an admin view, and neither has any
+ * use for a credential.
+ */
+async function listLiveSessions(userId, { limit = 50 } = {}) {
+  const result = await db.query(
+    `SELECT family_id AS "familyId",
+            issued_at AS "issuedAt",
+            used_at   AS "usedAt",
+            origin_hash AS "originHash",
+            device_label AS "deviceLabel"
+       FROM refresh_tokens
+      WHERE user_id = $1
+        AND revoked_at IS NULL
+        AND expires_at > now()
+      ORDER BY issued_at DESC
+      LIMIT $2`,
+    [userId, Math.min(Math.max(1, Math.floor(limit) || 50), 200)]
+  );
+  return result.rows;
 }
 
 /**
@@ -236,6 +277,7 @@ module.exports = {
   bumpUserTokenVersion,
   bumpAdminTokenVersion,
   recordRefreshToken,
+  listLiveSessions,
   revokeAllUserRefreshTokens,
   revokeRefreshFamily,
   consumeRefreshToken,

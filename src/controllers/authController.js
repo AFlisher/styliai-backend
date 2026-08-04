@@ -16,6 +16,15 @@ const { passwordSchema, PASSWORD_POLICY_MESSAGE } = require('../utils/passwordPo
 const escapeHtml = require('../utils/escapeHtml');
 const notificationModel = require('../models/notificationModel');
 const { getCountryFromIp } = require('../utils/geoIp');
+// SEC-18.3: keyed, irreversible origin key. Sits beside getCountryFromIp
+// deliberately - they consume the same req.ip and it should be obvious at the
+// import site that one produces analytics and the other produces a correlation
+// key, and that neither stores the address.
+const { originHashFor } = require('../utils/originHash');
+// SEC-18.5: a coarse, bucketed client label - deliberately NOT the raw
+// User-Agent, which is a fingerprinting surface far more precise than a
+// session list needs. See utils/deviceLabel.js.
+const { deviceLabelFor } = require('../utils/deviceLabel');
 const sessionService = require('../services/sessionService');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID;
@@ -221,10 +230,18 @@ async function register(req, res) {
     // forever - an old mailbox compromise never stopped being exploitable.
     const verificationExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_HOURS * 3600 * 1000);
 
-    // Resolve country from the request IP for analytics only; the IP itself is not stored.
+    // Resolve country from the request IP for analytics only; the IP itself is
+    // still not stored. SEC-18.3 adds a KEYED HASH of it alongside - not the
+    // address. HMAC(server_salt, ip) answers "how many accounts share this
+    // origin" without retaining personal data or permitting reverse lookup,
+    // which is the audit's own recommendation. Null when IP_HASH_SALT is unset
+    // or the address is unresolvable; consumers must treat null as "unknown
+    // origin" and never as a group key, or every unresolvable request would be
+    // grouped into one fake cluster of unrelated accounts.
     const geo = getCountryFromIp(req.ip);
     const countryCode = geo ? geo.countryCode : null;
     const countryName = geo ? geo.countryName : null;
+    const signupOriginHash = originHashFor(req);
 
     // Get a client from the pool for the transaction
     client = await db.pool.connect();
@@ -236,9 +253,9 @@ async function register(req, res) {
     // the verification token is stored, so a DB/backup leak can't be used to
     // verify arbitrary accounts - same handling as reset_token_hash.
     await client.query(`
-      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token_hash, verification_token_expires_at, provider, country_code, country_name)
-      VALUES ($1, $2, $3, $4, false, $5, $6, 'email', $7, $8)
-    `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, hashToken(verificationToken), verificationExpiresAt, countryCode, countryName]);
+      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token_hash, verification_token_expires_at, provider, country_code, country_name, signup_origin_hash)
+      VALUES ($1, $2, $3, $4, false, $5, $6, 'email', $7, $8, $9)
+    `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, hashToken(verificationToken), verificationExpiresAt, countryCode, countryName, signupOriginHash]);
 
     // Save corresponding profile inside public.profiles
     await client.query(`
@@ -476,7 +493,15 @@ async function login(req, res) {
     // signing in on a second device does not disturb the first - and a theft
     // detected on one device revokes only that chain, unless the reuse
     // response escalates to a full account-wide revocation.
-    await sessionService.recordRefreshToken({ userId: user.id, token: refreshToken });
+    // SEC-18.5: record WHERE this session started. A login is the only moment
+    // request context is available for a session - the rotation path has none -
+    // so this is where the signal has to be captured.
+    await sessionService.recordRefreshToken({
+      userId: user.id,
+      token: refreshToken,
+      originHash: originHashFor(req),
+      deviceLabel: deviceLabelFor(req),
+    });
 
     // A successful login restores the full failed-attempt budget (SEC-1.3).
     // refresh_token_hash is no longer written here: the refresh_tokens table
@@ -940,16 +965,20 @@ async function googleSignIn(req, res) {
         // 3) New user — create account
         const userId = uuidv4();
 
-        // Resolve country from the request IP for analytics only; the IP itself is not stored.
+        // Same as the email path: country for analytics, plus SEC-18.3's keyed
+        // origin hash. This path matters MORE for correlation, not less - it
+        // produces an instantly-verified account with no email round-trip
+        // (SEC-18.4), so it is the cheaper of the two to farm.
         const geo = getCountryFromIp(req.ip);
         const countryCode = geo ? geo.countryCode : null;
         const countryName = geo ? geo.countryName : null;
+        const signupOriginHash = originHashFor(req);
 
         await db.query(
           `INSERT INTO public.users
-             (id, full_name, email, password_hash, email_verified, google_id, provider, avatar_url, country_code, country_name)
-           VALUES ($1, $2, $3, NULL, true, $4, 'google', $5, $6, $7)`,
-          [userId, fullName, email, googleId, avatarUrl, countryCode, countryName]
+             (id, full_name, email, password_hash, email_verified, google_id, provider, avatar_url, country_code, country_name, signup_origin_hash)
+           VALUES ($1, $2, $3, NULL, true, $4, 'google', $5, $6, $7, $8)`,
+          [userId, fullName, email, googleId, avatarUrl, countryCode, countryName, signupOriginHash]
         );
 
         // Create matching profile row
@@ -997,7 +1026,14 @@ async function googleSignIn(req, res) {
 
     // SEC-1.4: same family bookkeeping as password login - this path must not
     // be a way to obtain a refresh token that reuse detection cannot see.
-    await sessionService.recordRefreshToken({ userId: user.id, token: refreshToken });
+    // SEC-18.5: and, for the same reason, not a way to obtain a session that
+    // concurrent-use detection cannot see either.
+    await sessionService.recordRefreshToken({
+      userId: user.id,
+      token: refreshToken,
+      originHash: originHashFor(req),
+      deviceLabel: deviceLabelFor(req),
+    });
     await db.query(
       'UPDATE public.users SET refresh_token_hash = NULL WHERE id = $1',
       [user.id]

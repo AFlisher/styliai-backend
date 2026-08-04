@@ -301,6 +301,32 @@ async function rewardAd(userId) {
 
     // 2. Check today's record in daily_rewards - now safely serialized per
     // user by the row lock above.
+    //
+    // SEC-4.2 - THE DAY BOUNDARY IS 00:00 UTC, FOR EVERY USER, DELIBERATELY.
+    //
+    // `CURRENT_DATE` resolves in the database session timezone, which is UTC on
+    // Supabase. There is no per-user timezone column and none is added, so a
+    // user in UTC+9 sees their daily reward reset at 09:00 local and a user in
+    // UTC-5 at 19:00 local. That is a UX wrinkle, and the audit records it as
+    // Informational rather than as a security gap - but the reason it stays
+    // this way IS a security argument, and it is worth stating where the code
+    // is rather than only in a document:
+    //
+    // A server-fixed boundary is NON-MANIPULABLE. The moment the reset depends
+    // on a per-user offset, that offset becomes an input - and an input that
+    // shifts when a user becomes eligible for free credits is one they have
+    // every incentive to change. Even stored server-side and only editable
+    // through a profile endpoint, "move my timezone forward, claim again"
+    // becomes a second daily claim unless the write is itself rate-limited and
+    // audited. A client-supplied offset would be strictly worse: it would make
+    // the cap trivially bypassable by anyone willing to send a different number.
+    //
+    // So the trade is explicit: consistency and non-manipulability, at the cost
+    // of a reset that is mid-day for users far from UTC. If local-day resets are
+    // ever wanted, the offset must be server-resolved (e.g. fixed at
+    // registration from the same geo lookup that sets country_code), immutable
+    // or audited-on-change, and the daily cap must key on the user's local date
+    // computed server-side - never on anything the client sends.
     const limitCheck = await client.query(
       "SELECT id FROM daily_rewards WHERE user_id = $1 AND reward_date = CURRENT_DATE AND credits_claimed >= 1",
       [userId]
