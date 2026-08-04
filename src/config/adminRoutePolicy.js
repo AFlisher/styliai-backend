@@ -65,6 +65,11 @@ const ADMIN_ROUTE_POLICY = Object.freeze({
   // --- money, pricing and user records ---
   "GET /api/admin/users/search": "superadmin",
   "POST /api/admin/users/:id/adjust-balance": "superadmin",
+  // SEC-18.2: suspending an account terminates its sessions immediately and
+  // stops it spending. Same tier as balance adjustment - both are irreversible
+  // -feeling actions against a specific, identified user.
+  "POST /api/admin/users/:id/suspend": "superadmin",
+  "POST /api/admin/users/:id/reinstate": "superadmin",
   "POST /api/credit-packs": "superadmin",
   "PUT /api/credit-packs/:id": "superadmin",
   "DELETE /api/credit-packs/:id": "superadmin",

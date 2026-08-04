@@ -13,10 +13,23 @@
 
 process.env.ADMIN_JWT_SECRET = "test-only-secret-never-used-in-production";
 
+// This suite drives every route in ADMIN_ROUTE_POLICY at every role, so its
+// request count is a product of the table's size - it grew when Phase 6 added
+// the suspend/reinstate routes and began tripping adminActionLimiter's
+// IP-keyed budget, turning authorization assertions into 429s. Raising the
+// budget here keeps the matrix measuring authorization rather than throughput;
+// rate limiting has its own dedicated suites.
+process.env.RATE_LIMIT_ADMIN_ACTION_LIMITER_LIMIT = "100000";
+process.env.RATE_LIMIT_ADMIN_LOGIN_LIMITER_LIMIT = "100000";
+process.env.RATE_LIMIT_ADMIN_GENERATION_PREVIEW_LIMITER_LIMIT = "100000";
+
 jest.mock("../config/db", () => ({
   query: jest.fn().mockResolvedValue({ rows: [], rowCount: 0 }),
   pool: { connect: jest.fn() },
 }));
+// Phase 6: the auth middlewares now read session state per request. See the
+// helper for why this is mocked rather than queued into each db.query stub.
+jest.mock("../services/sessionService", () => require("../../test/mocks/activeSession"));
 
 const request = require("supertest");
 const jwt = require("jsonwebtoken");

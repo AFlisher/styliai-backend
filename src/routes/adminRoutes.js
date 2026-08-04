@@ -27,6 +27,11 @@ router.get("/analytics/generation/overview", adminActionLimiter, adminAuthMiddle
 router.get("/analytics/generation/summary", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/analytics/generation/summary"), adminGenerationAnalyticsController.getSummary);
 router.get("/users/search", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/users/search"), adminController.searchUserByEmail);
 router.post("/users/:id/adjust-balance", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/adjust-balance"), adminController.adjustUserBalance);
+// SEC-18.2 (Phase 6): account suspension. superadmin tier - it acts on a named
+// user and ends their sessions, which sits with balance adjustment and PII
+// lookup rather than with catalog authoring.
+router.post("/users/:id/suspend", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/suspend"), adminController.suspendUser);
+router.post("/users/:id/reinstate", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/reinstate"), adminController.reinstateUser);
 
 // Admin-only Stability AI testing tool (Style Manager's "Test Prompt" modal).
 // No wallet charge, no creation-history write - see stabilityController for why.

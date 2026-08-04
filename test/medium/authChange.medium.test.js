@@ -37,8 +37,25 @@ describe("FT-009 — change-password succeeds and rotates sessions", () => {
 
     const user = fakeDb.state.users.find((u) => u.id === "cp1");
     expect(await bcrypt.compare(STRONG, user.password_hash)).toBe(true);
-    // Stored refresh hash now tracks the returned token (other sessions revoked).
-    expect(user.refresh_token_hash).toBe(sha256(res.body.refreshToken));
+
+    // Phase 6: a password change now revokes ACCESS tokens too, not just the
+    // refresh token. Before this, another device kept full API access for up
+    // to an hour after the owner changed their password specifically to lock
+    // it out. The epoch bump is what closes that window.
+    expect(user.token_version).toBe(1);
+    expect(user.refresh_token_hash).toBeNull();
+
+    // The caller's own new pair is minted at the POST-bump epoch, so this
+    // session survives while every other one dies - otherwise changing your
+    // password would sign you out of the device you are holding.
+    const decoded = jwt.verify(res.body.accessToken, process.env.SUPABASE_JWT_SECRET);
+    expect(decoded.tv).toBe(1);
+
+    // The returned refresh token is recorded and usable; the old one is gone.
+    const row = fakeDb.state.refreshTokens.find((r) => r.token_hash === sha256(res.body.refreshToken));
+    expect(row).toBeDefined();
+    expect(row.used_at).toBeNull();
+    expect(row.revoked_at).toBeNull();
   });
 
   it("rejects an incorrect current password with 400", async () => {

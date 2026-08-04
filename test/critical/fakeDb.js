@@ -24,6 +24,9 @@ const state = {
   notifications: [], // { user_id, type, title, body, is_read }
   adminAuditLog: [], // SEC-15.1: { adminId, action, targetId, before, after }
   integrityVerdicts: new Map(), // SEC-0.2: token_sha256 -> { status, verdict, ... }
+  // Phase 6 (SEC-1.4): one row per issued refresh token.
+  // { token_hash, user_id, family_id, expires_at, used_at, revoked_at, revoked_reason }
+  refreshTokens: [],
 };
 
 function reset() {
@@ -37,6 +40,7 @@ function reset() {
   state.notifications = [];
   state.adminAuditLog = [];
   state.integrityVerdicts = new Map();
+  state.refreshTokens = [];
 }
 
 function seedAdmin(a) {
@@ -47,6 +51,7 @@ function seedAdmin(a) {
     password_hash: a.password_hash,
     failed_login_attempts: 0,
     locked_until: null,
+    token_version: 0,
     ...a,
   };
   state.admins.push(admin);
@@ -67,6 +72,12 @@ function seedUser(u) {
     reset_token_expires_at: null,
     failed_login_attempts: 0,
     locked_until: null,
+    // Phase 6 columns, defaulted to match migration_session_revocation.sql so
+    // a seeded user behaves like a freshly migrated row.
+    token_version: 0,
+    status: "active",
+    status_reason: null,
+    verification_token_expires_at: null,
     created_at: new Date().toISOString(),
     full_name: "Test User",
     ...u,
@@ -334,9 +345,45 @@ async function query(text, params = []) {
     return { rows: [], rowCount: 1 };
   }
 
+  // ---- Phase 6 session-state reads ----
+  //
+  // authMiddleware and adminAuthMiddleware now read token_version (and status)
+  // on EVERY authenticated request. Most suites here mint a JWT for a synthetic
+  // identity and never seed a row, because what they are asserting is what the
+  // endpoint does once authenticated - not authentication itself.
+  //
+  // Rather than force ten unrelated suites into identity bookkeeping that
+  // tests nothing, an unseeded identity reads as a live, active session at
+  // epoch 0. The properties this papers over - that a DELETED user or admin is
+  // refused, and that a version mismatch is refused - are asserted directly,
+  // against seeded rows, in test/critical/sessionRevocation.critical.test.js.
+  // Seeded rows always win, so any suite that wants the real behaviour gets it
+  // by seeding.
+  // Matched on the exact projection, not merely "mentions token_version": the
+  // refresh endpoint also selects token_version by id, and intercepting that
+  // would strip the id/email/status columns it needs.
+  if (/^SELECT token_version(, status)? FROM/.test(q) && q.includes("WHERE id = $1")) {
+    if (q.includes("FROM admins")) {
+      const admin = state.admins.find((a) => a.id === params[0]);
+      return admin
+        ? { rows: [{ token_version: admin.token_version || 0 }], rowCount: 1 }
+        : { rows: [{ token_version: 0 }], rowCount: 1 };
+    }
+    if (/FROM public\.users|FROM users/.test(q)) {
+      const u = findUserBy((x) => x.id === params[0]);
+      return u
+        ? { rows: [{ token_version: u.token_version || 0, status: u.status || "active" }], rowCount: 1 }
+        : { rows: [{ token_version: 0, status: "active" }], rowCount: 1 };
+    }
+  }
+
   // ---- admins (admin login) ----
   if (q.startsWith("SELECT") && q.includes("FROM admins")) {
-    const admin = state.admins.find((a) => a.email === params[0]);
+    // Phase 6 (SEC-15.3): adminAuthMiddleware reads session state by id on
+    // every request; admin login still looks up by email.
+    const admin = q.includes("WHERE id = $1")
+      ? state.admins.find((a) => a.id === params[0])
+      : state.admins.find((a) => a.email === params[0]);
     if (!admin) return { rows: [], rowCount: 0 };
     const row = q.includes("is_locked") ? { ...admin, is_locked: isLocked(admin) } : admin;
     return { rows: [row], rowCount: 1 };
@@ -346,6 +393,10 @@ async function query(text, params = []) {
     if (!admin) return { rows: [], rowCount: 0 };
     if (q.includes("failed_login_attempts = CASE")) {
       return applyFailedLogin(admin); // SEC-1.3 failure increment
+    }
+    if (q.includes("SET token_version = token_version + 1")) {
+      admin.token_version = (admin.token_version || 0) + 1;
+      return { rows: [{ token_version: admin.token_version }], rowCount: 1 };
     }
     if (q.includes("failed_login_attempts = 0")) {
       admin.failed_login_attempts = 0; // SEC-1.3 reset on successful login
@@ -373,13 +424,15 @@ async function query(text, params = []) {
       return { rows: [], rowCount: 1 };
     }
     // Register shape: (id, full_name, email, password_hash,
-    // email_verified=false, verification_token_hash, provider='email')
+    // email_verified=false, verification_token_hash,
+    // verification_token_expires_at, provider='email')  [Phase 6 added $6]
     seedUser({
       id: params[0],
       full_name: params[1],
       email: params[2],
       password_hash: params[3],
       verification_token_hash: params[4],
+      verification_token_expires_at: params[5],
       email_verified: false,
       provider: "email",
     });
@@ -392,6 +445,63 @@ async function query(text, params = []) {
     return {
       rows: user ? [{ adsProgress: user.ads_progress ?? 0, generatedImages: user.generated_images ?? 0 }] : [],
       rowCount: user ? 1 : 0,
+    };
+  }
+
+  // ---- refresh_tokens (Phase 6 / SEC-1.4) ----
+  // Mirrors sessionService's SQL semantics, including the atomicity that makes
+  // reuse detection work: the consuming UPDATE matches only an unused,
+  // unrevoked, unexpired row, so a second consume of the same hash falls
+  // through to the diagnostic SELECT exactly as it does in Postgres.
+  if (q.includes("INSERT INTO refresh_tokens")) {
+    state.refreshTokens.push({
+      token_hash: params[0],
+      user_id: params[1],
+      family_id: params[2],
+      expires_at: params[3],
+      used_at: null,
+      revoked_at: null,
+      revoked_reason: null,
+    });
+    return { rows: [], rowCount: 1 };
+  }
+
+  if (q.includes("UPDATE refresh_tokens") && q.includes("SET used_at = now()")) {
+    const row = state.refreshTokens.find(
+      (r) =>
+        r.token_hash === params[0] &&
+        r.used_at === null &&
+        r.revoked_at === null &&
+        new Date(r.expires_at) > new Date()
+    );
+    if (!row) return { rows: [], rowCount: 0 };
+    row.used_at = new Date().toISOString();
+    return { rows: [{ user_id: row.user_id, family_id: row.family_id }], rowCount: 1 };
+  }
+
+  if (q.includes("UPDATE refresh_tokens") && q.includes("SET revoked_at = now()")) {
+    const matches = q.includes("WHERE user_id = $1")
+      ? state.refreshTokens.filter((r) => r.user_id === params[0] && r.revoked_at === null)
+      : state.refreshTokens.filter((r) => r.family_id === params[0] && r.revoked_at === null);
+    matches.forEach((r) => {
+      r.revoked_at = new Date().toISOString();
+      r.revoked_reason = params[1];
+    });
+    return { rows: [], rowCount: matches.length };
+  }
+
+  if (q.startsWith("SELECT") && q.includes("FROM refresh_tokens")) {
+    const row = state.refreshTokens.find((r) => r.token_hash === params[0]);
+    if (!row) return { rows: [], rowCount: 0 };
+    return {
+      rows: [{
+        user_id: row.user_id,
+        family_id: row.family_id,
+        used_at: row.used_at,
+        revoked_at: row.revoked_at,
+        is_expired: new Date(row.expires_at) <= new Date(),
+      }],
+      rowCount: 1,
     };
   }
 
@@ -410,11 +520,99 @@ async function query(text, params = []) {
 
   // ---- users: UPDATE ----
   if (q.includes("UPDATE public.users")) {
+    // Phase 6 (SEC-1.5): email verification is consumed by a single
+    // conditional UPDATE keyed on the token hash, with expiry evaluated in
+    // SQL. Routed first because it does not key on the user id.
+    if (q.includes("SET email_verified = true") && q.includes("WHERE verification_token_hash = $1")) {
+      const target = findUserBy(
+        (u) =>
+          u.verification_token_hash === params[0] &&
+          u.verification_token_expires_at !== null &&
+          u.verification_token_expires_at !== undefined &&
+          new Date(u.verification_token_expires_at) > new Date()
+      );
+      if (!target) return { rows: [], rowCount: 0 };
+      target.email_verified = true;
+      target.verification_token_hash = null;
+      target.verification_token_expires_at = null;
+      return { rows: [{ id: target.id }], rowCount: 1 };
+    }
+
+    // Phase 6: password reset is consumed the same way - matched on the hash
+    // inside the write, with expiry in SQL, so a replay finds nothing.
+    if (q.includes("WHERE reset_token_hash = $2")) {
+      const target = findUserBy(
+        (u) =>
+          u.reset_token_hash === params[1] &&
+          u.reset_token_expires_at !== null &&
+          u.reset_token_expires_at !== undefined &&
+          new Date(u.reset_token_expires_at) > new Date()
+      );
+      if (!target) return { rows: [], rowCount: 0 };
+      target.password_hash = params[0];
+      target.reset_token_hash = null;
+      target.reset_token_expires_at = null;
+      target.refresh_token_hash = null;
+      target.failed_login_attempts = 0;
+      target.locked_until = null;
+      target.token_version = (target.token_version || 0) + 1;
+      return { rows: [{ id: target.id }], rowCount: 1 };
+    }
+
+    // Phase 6: legacy refresh migration - conditional on the stored hash.
+    if (q.includes("SET refresh_token_hash = NULL") && q.includes("AND refresh_token_hash = $2")) {
+      const target = findUserBy((u) => u.id === params[0] && u.refresh_token_hash === params[1]);
+      if (!target) return { rows: [], rowCount: 0 };
+      target.refresh_token_hash = null;
+      return { rows: [{ id: target.id }], rowCount: 1 };
+    }
+
+    // Phase 6: transparent bcrypt upgrade - guarded on the hash just read.
+    if (q.includes("SET password_hash = $1") && q.includes("AND password_hash = $3")) {
+      const target = findUserBy((u) => u.id === params[1] && u.password_hash === params[2]);
+      if (!target) return { rows: [], rowCount: 0 };
+      target.password_hash = params[0];
+      return { rows: [], rowCount: 1 };
+    }
+
+    // Phase 6: admin suspend/reinstate.
+    if (q.includes("SET status = $1")) {
+      const target = findUserBy((u) => u.id === params[3]);
+      if (!target) return { rows: [], rowCount: 0 };
+      target.status = params[0];
+      target.status_reason = params[1];
+      target.status_changed_at = new Date().toISOString();
+      target.status_changed_by = params[2];
+      target.token_version = (target.token_version || 0) + 1;
+      target.refresh_token_hash = null;
+      return {
+        rows: [{ id: target.id, email: target.email, status: target.status, token_version: target.token_version }],
+        rowCount: 1,
+      };
+    }
+
     const user = findUserBy((u) => u.id === last);
     if (!user) return { rows: [], rowCount: 0 };
+
+    // Phase 6: standalone token_version bump (logout-all, reuse detection).
+    if (q.includes("SET token_version = token_version + 1") && !q.includes("password_hash")) {
+      user.token_version = (user.token_version || 0) + 1;
+      return { rows: [{ token_version: user.token_version }], rowCount: 1 };
+    }
+
+    // Phase 6: change-password bumps the epoch in the same statement.
+    if (q.includes("password_hash = $1") && q.includes("token_version = token_version + 1")) {
+      user.password_hash = params[0];
+      user.refresh_token_hash = null;
+      user.token_version = (user.token_version || 0) + 1;
+      return { rows: [{ token_version: user.token_version }], rowCount: 1 };
+    }
+
     if (q.includes("failed_login_attempts = CASE")) {
       return applyFailedLogin(user); // SEC-1.3 failure increment
     }
+    // Phase 6: atomic verification consume (matches on the hash, not the id).
+    // Handled before the id lookup below because it is keyed differently.
     if (q.includes("google_id = $1")) {
       // Link an existing email account to Google.
       user.google_id = params[0];
@@ -437,10 +635,20 @@ async function query(text, params = []) {
     } else if (q.includes("password_hash = $1, refresh_token_hash = $2")) {
       user.password_hash = params[0];
       user.refresh_token_hash = params[1]; // rotation on change-password
+    } else if (q.includes("verification_token_hash = $1, verification_token_expires_at = $2")) {
+      user.verification_token_hash = params[0];
+      user.verification_token_expires_at = params[1];
     } else if (q.includes("verification_token_hash = $1")) {
       user.verification_token_hash = params[0];
     } else if (q.includes("SET refresh_token_hash = NULL")) {
       user.refresh_token_hash = null; // logout revocation
+      if (q.includes("failed_login_attempts = 0")) {
+        // Phase 6: login clears the legacy column AND restores the SEC-1.3
+        // budget in one statement. Without this branch the lockout counter
+        // would survive a successful login.
+        user.failed_login_attempts = 0;
+        user.locked_until = null;
+      }
     } else if (q.includes("refresh_token_hash = $1")) {
       user.refresh_token_hash = params[0];
       if (q.includes("failed_login_attempts = 0")) {

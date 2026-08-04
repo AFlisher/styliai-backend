@@ -16,6 +16,7 @@ const { passwordSchema, PASSWORD_POLICY_MESSAGE } = require('../utils/passwordPo
 const escapeHtml = require('../utils/escapeHtml');
 const notificationModel = require('../models/notificationModel');
 const { getCountryFromIp } = require('../utils/geoIp');
+const sessionService = require('../services/sessionService');
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_WEB_CLIENT_ID;
 if (!GOOGLE_CLIENT_ID) {
@@ -28,13 +29,64 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+// SEC-1.6 (Phase 6): bcrypt cost for user passwords, raised 10 -> 12 to match
+// the admin path (createAdmin.js and adminMfaService already use 12) and
+// current guidance. Every bcrypt.hash call below reads this constant so the
+// two can never drift.
+//
+// Existing users are NOT re-hashed in bulk - that is impossible, since the
+// plaintext is not stored. They are upgraded transparently on their next
+// successful login (see upgradePasswordHashIfNeeded), which is the only moment
+// the plaintext legitimately exists in memory.
+const BCRYPT_COST = 12;
+
+// SEC-1.5: how long an email-verification link stays usable. 24h matches the
+// audit's recommendation and the reset-token posture (1h) scaled to a flow
+// where the user may not be at their mailbox immediately.
+const VERIFICATION_TOKEN_TTL_HOURS = 24;
+
 // SEC-1.2: dummy hash compared against when a login hits a non-existent or
 // password-less (Google-only) account, so every login path performs the same
 // bcrypt work and response timing can't be used to enumerate registered
 // emails. Generated from 32 random bytes - no real password matches it - and
-// the cost (10) must stay equal to the bcrypt.hash(..., 10) calls below or
-// the timing gap reopens (asserted in authController.security.test.js).
-const DUMMY_PASSWORD_HASH = '$2b$10$IN2lBf2NrgPLnf6C3pXJeukistLDXcRLjHF6kDkXtB3vPDhqnGoDe';
+// the cost must stay equal to BCRYPT_COST above or the timing gap reopens
+// (asserted in authController.security.test.js).
+//
+// Transitional caveat, stated because it is real: while legacy cost-10 hashes
+// remain, comparing against one is roughly half the work of this cost-12
+// dummy, so a not-yet-upgraded account answers marginally faster than an
+// unknown email. The window closes per-account on first login. The
+// alternative - pinning the dummy at 10 - would make unknown emails faster
+// than every upgraded account instead, a gap that never closes.
+const DUMMY_PASSWORD_HASH = '$2b$12$6zXPpKvOR.YYqDUCbq1F..m180euxyXpguKBNY9c3fdvmfQBOZlpa';
+
+/**
+ * SEC-1.6: transparent cost upgrade.
+ *
+ * Called only after a password has already been verified, so the plaintext in
+ * hand is known-correct and this is the one moment a stronger hash can be
+ * derived without asking the user for anything. Best-effort by design: a
+ * failure here must never fail the login the user just passed, because the
+ * cost of the old hash is a hardening concern and being unable to sign in is
+ * an outage.
+ */
+async function upgradePasswordHashIfNeeded(userId, plaintext, storedHash) {
+  try {
+    if (typeof storedHash !== 'string') return;
+    const cost = Number(storedHash.split('$')[2]);
+    if (!Number.isFinite(cost) || cost >= BCRYPT_COST) return;
+
+    const upgraded = await bcrypt.hash(plaintext, BCRYPT_COST);
+    // Guarded on the hash we actually read, so a concurrent password change
+    // between the compare and this write is not silently reverted.
+    await db.query(
+      'UPDATE public.users SET password_hash = $1 WHERE id = $2 AND password_hash = $3',
+      [upgraded, userId, storedHash]
+    );
+  } catch (err) {
+    console.error('[auth] password hash upgrade failed (login unaffected):', err.message);
+  }
+}
 
 // SEC-1.3: per-account lockout bounds distributed brute-force that the
 // per-IP loginLimiter can't (rotating IPs get a fresh budget each; the
@@ -99,12 +151,22 @@ function generateAccessToken(user) {
   // These claims match Supabase's authenticated user payload, enabling direct
   // DB/Storage RLS. The extra `type` claim (SEC-1.1) lets authMiddleware
   // distinguish access from refresh tokens; Supabase ignores unknown claims.
+  //
+  // R-3 constraint: the Flutter client injects this token into the Supabase
+  // client, so sub/email/role/aud must never change shape. `tv` is an ADDITIVE
+  // claim only, which is why revocation was implemented this way rather than
+  // by restructuring the payload.
   const payload = {
     sub: user.id,
     email: user.email,
     role: 'authenticated',
     aud: 'authenticated',
-    type: 'access'
+    type: 'access',
+    // Phase 6: the session epoch this token was minted at. authMiddleware
+    // refuses the token once the stored counter moves past it. Defaults to 0
+    // for any caller that did not select the column, matching the column
+    // default and the middleware's treatment of an absent claim.
+    tv: typeof user.token_version === 'number' ? user.token_version : 0
   };
 
   return jwt.sign(payload, secret, { expiresIn: '1h' });
@@ -120,8 +182,23 @@ function generateRefreshToken(user) {
   // No `aud` claim here - authMiddleware requires `aud: 'authenticated'`, so
   // its absence is what keeps a refresh token unusable as an access token
   // (SEC-1.1). The `type` claim makes the distinction explicit going forward.
-  const payload = { sub: user.id, type: 'refresh' };
-  return jwt.sign(payload, secret, { expiresIn: '30d' });
+  // SEC-1.4 (Phase 6): 30d -> 14d. The JWT `exp` and the refresh_tokens row's
+  // expires_at are set from the same constant and are two independent layers -
+  // the JWT bounds it even if a row is somehow missed, the row bounds it even
+  // if the signing key outlives a policy change.
+  // `jti` is REQUIRED, not decorative. Without it the payload is only
+  // { sub, type, iat, exp } and `iat` has one-second resolution, so two
+  // refreshes for the same user inside the same second produce byte-identical
+  // tokens. Under Phase 6 that is not a cosmetic collision: the token is the
+  // PRIMARY KEY of refresh_tokens, so rotation would try to insert a row that
+  // already exists AND the successor would hash-equal the row just marked
+  // used - making the next legitimate refresh look exactly like a stolen-token
+  // replay and revoking the user's whole family. A random id per token makes
+  // every issued token distinct by construction.
+  const payload = { sub: user.id, type: 'refresh', jti: uuidv4() };
+  return jwt.sign(payload, secret, {
+    expiresIn: `${sessionService.REFRESH_TOKEN_TTL_DAYS}d`
+  });
 }
 
 // REGISTER endpoint
@@ -138,7 +215,11 @@ async function register(req, res) {
 
     const userId = uuidv4();
     const verificationToken = uuidv4();
-    const passwordHash = await bcrypt.hash(validated.password, 10);
+    const passwordHash = await bcrypt.hash(validated.password, BCRYPT_COST);
+    // SEC-1.5: verification links expire. Previously the token had no expiry
+    // column at all, so a link mailed once stayed a valid account takeover
+    // forever - an old mailbox compromise never stopped being exploitable.
+    const verificationExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_HOURS * 3600 * 1000);
 
     // Resolve country from the request IP for analytics only; the IP itself is not stored.
     const geo = getCountryFromIp(req.ip);
@@ -155,9 +236,9 @@ async function register(req, res) {
     // the verification token is stored, so a DB/backup leak can't be used to
     // verify arbitrary accounts - same handling as reset_token_hash.
     await client.query(`
-      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token_hash, provider, country_code, country_name)
-      VALUES ($1, $2, $3, $4, false, $5, 'email', $6, $7)
-    `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, hashToken(verificationToken), countryCode, countryName]);
+      INSERT INTO public.users (id, full_name, email, password_hash, email_verified, verification_token_hash, verification_token_expires_at, provider, country_code, country_name)
+      VALUES ($1, $2, $3, $4, false, $5, $6, 'email', $7, $8)
+    `, [userId, validated.fullName, validated.email.toLowerCase(), passwordHash, hashToken(verificationToken), verificationExpiresAt, countryCode, countryName]);
 
     // Save corresponding profile inside public.profiles
     await client.query(`
@@ -248,12 +329,37 @@ async function verifyEmail(req, res) {
   }
 
   try {
+    // SEC-1.5: consume the token in ONE conditional statement rather than
+    // SELECT-then-UPDATE. Two properties come from that single write:
+    //
+    //   expiry     - `verification_token_expires_at > now()` is evaluated by
+    //                the database, on the same clock that wrote it, so app/DB
+    //                skew cannot widen the window.
+    //   one-time   - only one caller can match a row whose hash is still set,
+    //                because the same statement clears it. A replayed link,
+    //                including two concurrent clicks of the same link, finds
+    //                nothing to match on the second attempt.
+    //
+    // NULL expiry is treated as expired, deliberately. The migration
+    // backfilled a fresh 24h window onto every pending token at deploy, so a
+    // NULL here means a token written by a path that forgot to set one - it
+    // should fail closed rather than resurrect the unbounded-lifetime bug.
     const result = await db.query(
-      'SELECT id, email_verified FROM public.users WHERE verification_token_hash = $1',
+      `UPDATE public.users
+       SET email_verified = true,
+           verification_token_hash = NULL,
+           verification_token_expires_at = NULL
+       WHERE verification_token_hash = $1
+         AND verification_token_expires_at IS NOT NULL
+         AND verification_token_expires_at > now()
+       RETURNING id`,
       [hashToken(token)]
     );
 
     if (result.rows.length === 0) {
+      // Invalid, expired and already-used are deliberately one response: the
+      // distinction would tell an attacker holding a leaked link whether the
+      // account exists and whether it has been claimed.
       return res.status(400).send(renderVerificationPage({
         success: false,
         title: "Verification Failed",
@@ -262,12 +368,6 @@ async function verifyEmail(req, res) {
     }
 
     const user = result.rows[0];
-
-    // Verify user and clear the token
-    await db.query(
-      'UPDATE public.users SET email_verified = true, verification_token_hash = NULL WHERE id = $1',
-      [user.id]
-    );
 
     logAuditEvent(req, { action: "email_verification", subject: user.id });
 
@@ -296,6 +396,7 @@ async function login(req, res) {
     // wrote locked_until, keeping app/DB clock skew out of the decision.
     const userRes = await db.query(
       `SELECT id, email, full_name, password_hash, email_verified, created_at,
+              token_version, status,
               (locked_until IS NOT NULL AND locked_until > now()) AS is_locked
        FROM public.users WHERE email = $1`,
       [validated.email.toLowerCase()]
@@ -345,21 +446,45 @@ async function login(req, res) {
       return res.status(401).json({ message: "Invalid email or password." });
     }
 
+    // SEC-18.2: a suspended account cannot start a new session either. Placed
+    // AFTER the password check on purpose - answering "this account is
+    // suspended" to an unauthenticated guess would turn the endpoint into an
+    // oracle for which emails are registered and which are in trouble.
+    if (user.status !== sessionService.ACTIVE_STATUS) {
+      logAuthFailure(req, { reason: "account_not_active", subject: user.id });
+      return res.status(403).json({
+        message: "This account has been suspended. Please contact support.",
+        code: "ACCOUNT_SUSPENDED"
+      });
+    }
+
     // Check email verification status
     if (!user.email_verified) {
       return res.status(403).json({ message: "Please verify your email before signing in." });
     }
 
+    // SEC-1.6: now that the password is known correct, upgrade a legacy
+    // cost-10 hash in place. Awaited so a login immediately followed by
+    // another observes the upgraded hash, but non-fatal inside.
+    await upgradePasswordHashIfNeeded(user.id, validated.password, user.password_hash);
+
     // Generate JWT access + refresh tokens
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    // Save refresh token hash in DB; a successful login also restores the
-    // full failed-attempt budget (SEC-1.3) in the same statement.
-    const hashedRefresh = hashToken(refreshToken);
+    // SEC-1.4: a login starts a NEW refresh family. Families are per-login, so
+    // signing in on a second device does not disturb the first - and a theft
+    // detected on one device revokes only that chain, unless the reuse
+    // response escalates to a full account-wide revocation.
+    await sessionService.recordRefreshToken({ userId: user.id, token: refreshToken });
+
+    // A successful login restores the full failed-attempt budget (SEC-1.3).
+    // refresh_token_hash is no longer written here: the refresh_tokens table
+    // is the record now, and leaving a stale value in the legacy column would
+    // keep a superseded token alive through the migration fallback.
     await db.query(
-      'UPDATE public.users SET refresh_token_hash = $1, failed_login_attempts = 0, locked_until = NULL WHERE id = $2',
-      [hashedRefresh, user.id]
+      'UPDATE public.users SET refresh_token_hash = NULL, failed_login_attempts = 0, locked_until = NULL WHERE id = $1',
+      [user.id]
     );
 
     logAuditEvent(req, { action: "login", subject: user.id, details: { method: "password" } });
@@ -404,7 +529,8 @@ async function refreshToken(req, res) {
     }
 
     const userRes = await db.query(
-      'SELECT id, email, full_name, refresh_token_hash, created_at FROM public.users WHERE id = $1',
+      `SELECT id, email, full_name, refresh_token_hash, created_at, token_version, status
+       FROM public.users WHERE id = $1`,
       [decoded.sub]
     );
 
@@ -412,20 +538,75 @@ async function refreshToken(req, res) {
       return res.status(401).json({ message: "User not found." });
     }
 
-    const user = userRes.rows[0];
+    let user = userRes.rows[0];
 
-    // Verify refresh token hash matches stored database hash
-    const currentHash = hashToken(refreshToken);
-    if (user.refresh_token_hash !== currentHash) {
-      return res.status(401).json({ message: "Invalid or expired refresh token." });
+    // SEC-18.2: a suspended account cannot mint fresh credentials. Checked
+    // here as well as in the middleware because refresh is the one endpoint
+    // whose entire purpose is to hand out a new access token.
+    if (user.status !== sessionService.ACTIVE_STATUS) {
+      logAuthFailure(req, { reason: "account_not_active", subject: user.id });
+      return res.status(403).json({
+        message: "This account has been suspended. Please contact support.",
+        code: "ACCOUNT_SUSPENDED"
+      });
     }
 
-    // Issue new access + refresh tokens
+    // SEC-1.4: rotation with reuse detection.
+    const consumption = await sessionService.consumeRefreshToken(refreshToken);
+    let familyId = consumption.familyId;
+
+    if (consumption.outcome === 'reuse') {
+      // The decisive case. This exact token was already exchanged, so two
+      // parties hold it: the legitimate client (which rotated and moved on)
+      // and whoever obtained a copy. Which of the two is presenting it now is
+      // unknowable, so the only safe response is to end the session for both
+      // and force a fresh authentication.
+      //
+      // Revoking the family alone would leave the thief's already-issued
+      // ACCESS token working for up to an hour, so token_version is bumped
+      // too - that is what makes this a real containment rather than a
+      // partial one.
+      await sessionService.revokeRefreshFamily(familyId, 'reuse_detected');
+      await sessionService.bumpUserTokenVersion(user.id);
+      logAuthFailure(req, { reason: "refresh_token_reuse_detected", subject: user.id });
+      logAuditEvent(req, {
+        action: "refresh_reuse_revocation",
+        outcome: "failure",
+        subject: user.id,
+      });
+      return res.status(401).json({
+        message: "Session has been revoked. Please sign in again.",
+        code: "SESSION_REVOKED"
+      });
+    }
+
+    if (consumption.outcome !== 'consumed') {
+      // 'unknown' may be a pre-Phase-6 session whose only record is the legacy
+      // column. Accept it exactly once and migrate it into a family, so this
+      // deploy does not sign out every existing user. Removable once the
+      // longest legacy token (30d) has expired - see the migration.
+      const migrated = consumption.outcome === 'unknown'
+        && await sessionService.consumeLegacyRefreshToken(user.id, refreshToken);
+
+      if (!migrated) {
+        // 'revoked' and 'expired' are reported identically to 'unknown': the
+        // client's only useful action in all three cases is to sign in again.
+        return res.status(401).json({ message: "Invalid or expired refresh token." });
+      }
+      familyId = undefined; // start a fresh family for the migrated session
+    }
+
+    // Issue new access + refresh tokens. The access token is minted from the
+    // row read above, so it carries the CURRENT token_version - a refresh
+    // performed after a revocation elsewhere cannot mint a stale-epoch token.
     const newAccessToken = generateAccessToken(user);
     const newRefreshToken = generateRefreshToken(user);
 
-    const newHashedRefresh = hashToken(newRefreshToken);
-    await db.query('UPDATE public.users SET refresh_token_hash = $1 WHERE id = $2', [newHashedRefresh, user.id]);
+    await sessionService.recordRefreshToken({
+      userId: user.id,
+      token: newRefreshToken,
+      familyId,
+    });
 
     res.json({
       accessToken: newAccessToken,
@@ -540,34 +721,47 @@ async function postResetPassword(req, res) {
     const validated = resetPasswordSchema.parse(req.body);
     const hashed = hashToken(validated.token);
 
-    const userRes = await db.query(
-      'SELECT id, reset_token_expires_at FROM public.users WHERE reset_token_hash = $1',
-      [hashed]
+    // Phase 6: consume the reset token in the SAME statement that sets the new
+    // password. Previously this was SELECT (check hash) -> check expiry in JS
+    // -> UPDATE, which leaves a window where two concurrent submissions of one
+    // link both pass the check and both set a password - the second attacker
+    // wins. Matching on the hash inside the write makes the link strictly
+    // one-time, and `reset_token_expires_at > now()` puts expiry on the
+    // database's clock rather than the app's.
+    //
+    // The same statement bumps token_version and the refresh families are
+    // revoked immediately after, so a session the attacker already holds dies
+    // with the old password instead of surviving up to an hour on its access
+    // token. Password reset is the account-recovery path, so it also clears
+    // any login lockout (SEC-1.3) - a locked-out owner regains access at once.
+    const newPasswordHash = await bcrypt.hash(validated.password, BCRYPT_COST);
+    const updated = await db.query(
+      `UPDATE public.users
+       SET password_hash = $1,
+           reset_token_hash = NULL,
+           reset_token_expires_at = NULL,
+           refresh_token_hash = NULL,
+           failed_login_attempts = 0,
+           locked_until = NULL,
+           token_version = token_version + 1
+       WHERE reset_token_hash = $2
+         AND reset_token_expires_at IS NOT NULL
+         AND reset_token_expires_at > now()
+       RETURNING id`,
+      [newPasswordHash, hashed]
     );
 
-    if (userRes.rows.length === 0) {
+    if (updated.rows.length === 0) {
+      // Invalid, expired and already-consumed collapse into one response for
+      // the same reason as email verification: separating them tells a holder
+      // of a leaked link something about the account.
       return res.status(400).send(renderResetPasswordPage({
         error: "The reset link is invalid, expired, or has already been used."
       }));
     }
 
-    const user = userRes.rows[0];
-    if (new Date() > new Date(user.reset_token_expires_at)) {
-      return res.status(400).send(renderResetPasswordPage({
-        error: "This password reset link has expired. Please request a new one."
-      }));
-    }
-
-    // Hash new password, clear the reset token, and revoke the refresh token
-    // so any session an attacker may already hold dies with the old password
-    // (complexity rules are enforced by resetPasswordSchema above). Password
-    // reset is the account-recovery path, so it also clears any login
-    // lockout (SEC-1.3) - a locked-out owner regains access immediately.
-    const newPasswordHash = await bcrypt.hash(validated.password, 10);
-    await db.query(
-      'UPDATE public.users SET password_hash = $1, reset_token_hash = NULL, reset_token_expires_at = NULL, refresh_token_hash = NULL, failed_login_attempts = 0, locked_until = NULL WHERE id = $2',
-      [newPasswordHash, user.id]
-    );
+    const user = updated.rows[0];
+    await sessionService.revokeAllUserRefreshTokens(user.id, 'password_reset');
 
     logAuditEvent(req, { action: "password_reset", subject: user.id });
 
@@ -636,7 +830,14 @@ async function resendVerification(req, res) {
       // Only the hash is stored, so the original token can't be re-sent -
       // issue a fresh one on every resend (also invalidates older links).
       const token = uuidv4();
-      await db.query('UPDATE public.users SET verification_token_hash = $1 WHERE id = $2', [hashToken(token), user.id]);
+      // SEC-1.5: a resend issues a fresh token AND a fresh 24h window. Without
+      // the expiry written here, the resend path would keep minting the
+      // unbounded-lifetime tokens this finding is about.
+      const resendExpiresAt = new Date(Date.now() + VERIFICATION_TOKEN_TTL_HOURS * 3600 * 1000);
+      await db.query(
+        'UPDATE public.users SET verification_token_hash = $1, verification_token_expires_at = $2 WHERE id = $3',
+        [hashToken(token), resendExpiresAt, user.id]
+      );
 
       const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
       const verificationLink = `${backendUrl}/api/auth/verify?token=${token}`;
@@ -704,7 +905,7 @@ async function googleSignIn(req, res) {
 
     // 1) Look up by google_id
     const byGoogleId = await db.query(
-      'SELECT id, email, full_name, created_at FROM public.users WHERE google_id = $1',
+      'SELECT id, email, full_name, created_at, token_version, status FROM public.users WHERE google_id = $1',
       [googleId]
     );
 
@@ -714,7 +915,7 @@ async function googleSignIn(req, res) {
     } else {
       // 2) Look up by email
       const byEmail = await db.query(
-        'SELECT id, email, full_name, avatar_url, created_at FROM public.users WHERE email = $1',
+        'SELECT id, email, full_name, avatar_url, created_at, token_version, status FROM public.users WHERE email = $1',
         [email]
       );
 
@@ -772,21 +973,34 @@ async function googleSignIn(req, res) {
         }
 
         const newUserRes = await db.query(
-          'SELECT id, email, full_name, created_at FROM public.users WHERE id = $1',
+          'SELECT id, email, full_name, created_at, token_version, status FROM public.users WHERE id = $1',
           [userId]
         );
         user = newUserRes.rows[0];
       }
     }
 
+    // SEC-18.2: suspension applies to Google sign-in too. A provider that
+    // vouches for the identity says nothing about whether this service still
+    // permits the account.
+    if (user.status !== undefined && user.status !== sessionService.ACTIVE_STATUS) {
+      logAuthFailure(req, { reason: "account_not_active", subject: user.id });
+      return res.status(403).json({
+        message: "This account has been suspended. Please contact support.",
+        code: "ACCOUNT_SUSPENDED"
+      });
+    }
+
     // Generate JWT access + refresh tokens (same as email login)
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    const hashedRefresh = hashToken(refreshToken);
+    // SEC-1.4: same family bookkeeping as password login - this path must not
+    // be a way to obtain a refresh token that reuse detection cannot see.
+    await sessionService.recordRefreshToken({ userId: user.id, token: refreshToken });
     await db.query(
-      'UPDATE public.users SET refresh_token_hash = $1 WHERE id = $2',
-      [hashedRefresh, user.id]
+      'UPDATE public.users SET refresh_token_hash = NULL WHERE id = $1',
+      [user.id]
     );
 
     res.json({
@@ -842,16 +1056,31 @@ async function changePassword(req, res) {
       return res.status(400).json({ message: "Incorrect current password." });
     }
 
-    // Hash and update the new password, rotating the refresh token in the
-    // same statement: every other logged-in device/session is revoked, while
-    // the fresh token pair returned below keeps this session working.
-    const newAccessToken = generateAccessToken(user);
-    const newRefreshToken = generateRefreshToken(user);
-    const newHash = await bcrypt.hash(newPassword, 10);
-    await db.query(
-      'UPDATE public.users SET password_hash = $1, refresh_token_hash = $2 WHERE id = $3',
-      [newHash, hashToken(newRefreshToken), userId]
+    // Phase 6: a password change now invalidates ACCESS tokens too.
+    //
+    // Previously it rotated refresh_token_hash only, so another device kept
+    // full API access for up to an hour after the owner changed their password
+    // specifically to lock that device out - the window in which the change
+    // felt effective but was not. Bumping token_version closes it at once.
+    //
+    // Order matters: bump first, then mint. The new pair is issued from the
+    // post-bump version so the caller's own session survives, which is what
+    // makes this usable without signing the user out of the device they are
+    // holding.
+    const newHash = await bcrypt.hash(newPassword, BCRYPT_COST);
+    const bumpRes = await db.query(
+      `UPDATE public.users
+       SET password_hash = $1, refresh_token_hash = NULL, token_version = token_version + 1
+       WHERE id = $2
+       RETURNING token_version`,
+      [newHash, userId]
     );
+    await sessionService.revokeAllUserRefreshTokens(userId, 'password_change');
+
+    const rotatedUser = { ...user, token_version: bumpRes.rows[0].token_version };
+    const newAccessToken = generateAccessToken(rotatedUser);
+    const newRefreshToken = generateRefreshToken(rotatedUser);
+    await sessionService.recordRefreshToken({ userId, token: newRefreshToken });
 
     logAuditEvent(req, { action: "password_change", subject: userId });
 
@@ -867,12 +1096,20 @@ async function changePassword(req, res) {
   }
 }
 
-// LOGOUT endpoint
+// LOGOUT endpoint (this device)
 async function logout(req, res) {
   try {
-    // Revoke the refresh token server-side so a copy an attacker may hold
+    // Revoke the refresh tokens server-side so a copy an attacker may hold
     // (device compromise, log leak, etc.) stops working the moment the user
-    // logs out, instead of remaining valid for its full 30-day lifetime.
+    // logs out, instead of remaining valid for its full lifetime.
+    //
+    // Deliberately does NOT bump token_version. Logout is per-device by
+    // design, and a bump would sign the user out of every other device too -
+    // surprising behaviour for a button labelled "log out". The remaining
+    // access token on THIS device is discarded by the client and expires
+    // within the hour; a user who needs the stronger guarantee has
+    // /logout-all, which states what it does.
+    await sessionService.revokeAllUserRefreshTokens(req.user.id, 'logout');
     await db.query(
       'UPDATE public.users SET refresh_token_hash = NULL WHERE id = $1',
       [req.user.id]
@@ -881,6 +1118,33 @@ async function logout(req, res) {
     return res.status(204).send();
   } catch (err) {
     logUnexpectedError(req, err, { where: "logout" });
+    return res.status(500).json({ message: "An unexpected error occurred." });
+  }
+}
+
+// LOGOUT EVERYWHERE endpoint (Phase 6)
+async function logoutAll(req, res) {
+  try {
+    // The user-facing half of the revocation mechanism: "sign me out of every
+    // device", the standard response to a lost or stolen phone. Bumping
+    // token_version kills every outstanding ACCESS token immediately -
+    // including the one making this request, which is correct and intended.
+    // The client must sign in again afterwards.
+    await sessionService.revokeAllUserRefreshTokens(req.user.id, 'logout_all');
+    const newVersion = await sessionService.bumpUserTokenVersion(req.user.id);
+    await db.query(
+      'UPDATE public.users SET refresh_token_hash = NULL WHERE id = $1',
+      [req.user.id]
+    );
+
+    logAuditEvent(req, {
+      action: "logout_all",
+      subject: req.user.id,
+      details: { tokenVersion: newVersion },
+    });
+    return res.status(204).send();
+  } catch (err) {
+    logUnexpectedError(req, err, { where: "logoutAll" });
     return res.status(500).json({ message: "An unexpected error occurred." });
   }
 }
@@ -898,4 +1162,5 @@ module.exports = {
   googleSignIn,
   changePassword,
   logout,
+  logoutAll,
 };

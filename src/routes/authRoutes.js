@@ -25,6 +25,10 @@ router.get('/verify', emailVerificationLimiter, authController.verifyEmail);
 router.post('/login', loginLimiter, verifyIntegrity, interpretIntegrity, enforceIntegrity, authController.login);
 router.post('/refresh', refreshLimiter, authController.refreshToken);
 router.post('/logout', accountActionLimiter, authMiddleware, authController.logout);
+// Phase 6: "sign me out of everywhere". Bumps token_version, so it also ends
+// the session making the call - that is the point, and the client is expected
+// to return to the login screen afterwards.
+router.post('/logout-all', accountActionLimiter, authMiddleware, authController.logoutAll);
 router.post('/google', googleSignInLimiter, authController.googleSignIn);
 router.post('/change-password', accountActionLimiter, authMiddleware, authController.changePassword);
 router.post('/forgot-password', forgotPasswordLimiter, authController.forgotPassword);

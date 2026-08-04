@@ -13,6 +13,9 @@ jest.mock("../../src/config/db", () => ({ query: jest.fn(), pool: { connect: jes
 jest.mock("../../src/config/supabase", () => ({
   storage: { from: () => ({ list: jest.fn().mockResolvedValue({ data: [], error: null }) }) },
 }));
+// Phase 6: the auth middlewares now read session state per request. See the
+// helper for why this is mocked rather than queued into each db.query stub.
+jest.mock("../../src/services/sessionService", () => require("../mocks/activeSession"));
 
 const jwt = require("jsonwebtoken");
 const request = require("supertest");

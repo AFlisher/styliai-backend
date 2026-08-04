@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
+const sessionService = require('../services/sessionService');
 
-function adminAuthMiddleware(req, res, next) {
+async function adminAuthMiddleware(req, res, next) {
   const authHeader = req.headers['authorization'];
   if (!authHeader) {
     return res.status(401).json({ message: "No authorization header provided." });
@@ -29,6 +30,35 @@ function adminAuthMiddleware(req, res, next) {
       return res.status(403).json({ message: "Admin privileges required." });
     }
 
+    // SEC-15.3 (Phase 6): the admin token lives in the dashboard's
+    // localStorage, so an XSS exfiltrates it and there was previously no way
+    // to stop it before its 2h `exp`. Same mechanism as the user path - one
+    // indexed read, compared against the epoch the token was minted at.
+    // Admin traffic is human-paced, so the per-request cost is irrelevant here.
+    let sessionState;
+    try {
+      sessionState = await sessionService.getAdminSessionState(decoded.sub);
+    } catch (dbErr) {
+      // Fail closed, for the same reason as the user middleware: an
+      // unreadable session table must not silently re-enable revoked tokens.
+      console.error("Admin session state read failed:", dbErr.message);
+      return res.status(503).json({ message: "Service temporarily unavailable." });
+    }
+
+    if (!sessionState) {
+      return res.status(401).json({ message: "Invalid or expired admin token." });
+    }
+
+    // Absent `tv` reads as 0 so admin tokens minted before this deploy keep
+    // working until the first revocation, exactly as on the user path.
+    const tokenVersion = typeof decoded.tv === 'number' ? decoded.tv : 0;
+    if (tokenVersion !== sessionState.token_version) {
+      return res.status(401).json({
+        message: "Admin session has been revoked. Please sign in again.",
+        code: "SESSION_REVOKED"
+      });
+    }
+
     req.admin = {
       id: decoded.sub,
       email: decoded.email,
@@ -55,7 +85,7 @@ function adminAuthMiddleware(req, res, next) {
  * `next()` instead of failing the request, so the route handler can shape its
  * response based on whether `req.admin` was set.
  */
-function optionalAdminAuth(req, res, next) {
+async function optionalAdminAuth(req, res, next) {
   const authHeader = req.headers['authorization'];
   if (!authHeader) {
     return next();
@@ -79,17 +109,39 @@ function optionalAdminAuth(req, res, next) {
     const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] });
 
     if (decoded.role === 'admin') {
-      req.admin = {
-        id: decoded.sub,
-        email: decoded.email,
-        role: decoded.role,
-        // SEC-15.4: carried here too. No route currently pairs
-        // optionalAdminAuth with a role guard, but the two paths must not
-        // disagree about what a req.admin contains - if they did, adding a
-        // guard to one of these shared endpoints later would fail closed for
-        // reasons nobody would think to look for here.
-        adminRole: decoded.adminRole
-      };
+      // SEC-15.3: revocation is checked here too. The file already warns that
+      // these two paths must not disagree about what constitutes a valid admin
+      // token; if only the strict path honoured token_version, a revoked token
+      // would still set `req.admin` on the shared catalog reads and still
+      // receive the admin-shaped response.
+      //
+      // Unlike the strict path this stays FAIL-OPEN on a database error, but
+      // open here means "treat as anonymous", not "treat as admin" - the
+      // caller simply gets the public response. Rejecting instead would take
+      // down GET /api/styles for every mobile user whenever the admin table
+      // is briefly unreachable, which is a far worse trade for a request that
+      // was never going to be privileged.
+      let sessionState = null;
+      try {
+        sessionState = await sessionService.getAdminSessionState(decoded.sub);
+      } catch (dbErr) {
+        return next();
+      }
+
+      const tokenVersion = typeof decoded.tv === 'number' ? decoded.tv : 0;
+      if (sessionState && tokenVersion === sessionState.token_version) {
+        req.admin = {
+          id: decoded.sub,
+          email: decoded.email,
+          role: decoded.role,
+          // SEC-15.4: carried here too. No route currently pairs
+          // optionalAdminAuth with a role guard, but the two paths must not
+          // disagree about what a req.admin contains - if they did, adding a
+          // guard to one of these shared endpoints later would fail closed for
+          // reasons nobody would think to look for here.
+          adminRole: decoded.adminRole
+        };
+      }
     }
 
     next();

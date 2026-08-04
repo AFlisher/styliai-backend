@@ -121,8 +121,20 @@ describe("API-003 — verified login succeeds", () => {
     const decoded = jwt.verify(res.body.accessToken, process.env.SUPABASE_JWT_SECRET);
     expect(decoded.sub).toBe("u2");
 
+    // Phase 6 (SEC-1.4): the refresh token is recorded as a row in
+    // refresh_tokens, not in users.refresh_token_hash. That column is
+    // deliberately left NULL on login so a superseded value cannot be revived
+    // through the legacy-migration fallback in the refresh endpoint.
     const user = fakeDb.state.users.find((u) => u.id === "u2");
-    expect(user.refresh_token_hash).toBe(sha256(res.body.refreshToken));
+    expect(user.refresh_token_hash).toBeNull();
+
+    const row = fakeDb.state.refreshTokens.find((r) => r.token_hash === sha256(res.body.refreshToken));
+    expect(row).toBeDefined();
+    expect(row.user_id).toBe("u2");
+    expect(row.used_at).toBeNull();
+    expect(row.revoked_at).toBeNull();
+    // A login starts a NEW family rather than joining an existing one.
+    expect(row.family_id).toEqual(expect.any(String));
   });
 
   it("returns a generic 401 for a wrong password (indistinguishable from unknown email)", async () => {
@@ -139,24 +151,44 @@ describe("API-003 — verified login succeeds", () => {
 });
 
 describe("API-005 — refresh token rotation", () => {
-  it("issues a new pair and rotates the stored hash", async () => {
+  it("issues a new pair, consumes the old token and keeps the family", async () => {
+    // Seeded as a Phase 6 session: a refresh_tokens row in a known family.
     const refreshToken = jwt.sign({ sub: "u4" }, process.env.SUPABASE_JWT_SECRET, { expiresIn: "30d" });
-    fakeDb.seedUser({ id: "u4", email: "r@example.com", email_verified: true, refresh_token_hash: sha256(refreshToken) });
+    fakeDb.seedUser({ id: "u4", email: "r@example.com", email_verified: true });
+    fakeDb.state.refreshTokens.push({
+      token_hash: sha256(refreshToken),
+      user_id: "u4",
+      family_id: "fam-1",
+      expires_at: new Date(Date.now() + 86400000).toISOString(),
+      used_at: null,
+      revoked_at: null,
+      revoked_reason: null,
+    });
 
     const res = await request(app).post("/api/auth/refresh").send({ refreshToken });
 
     expect(res.status).toBe(200);
     expect(res.body.accessToken).toBeDefined();
     expect(res.body.refreshToken).toBeDefined();
-    // The stored hash tracks the newly-returned refresh token (rotation). We
-    // avoid asserting string inequality of the two JWTs: the refresh payload
-    // is only { sub, iat, exp }, so two tokens minted in the same wall-clock
-    // second are legitimately identical - a timing artifact, not a contract.
+    // We avoid asserting string inequality of the two JWTs: the refresh
+    // payload is only { sub, iat, exp }, so two tokens minted in the same
+    // wall-clock second are legitimately identical - a timing artifact, not a
+    // contract.
     const decoded = jwt.verify(res.body.refreshToken, process.env.SUPABASE_JWT_SECRET);
     expect(decoded.sub).toBe("u4");
 
-    const user = fakeDb.state.users.find((u) => u.id === "u4");
-    expect(user.refresh_token_hash).toBe(sha256(res.body.refreshToken));
+    // Phase 6: rotation is now observable as state, which is what makes reuse
+    // detectable at all. The presented token must be marked used...
+    const oldRow = fakeDb.state.refreshTokens.find((r) => r.token_hash === sha256(refreshToken));
+    expect(oldRow.used_at).not.toBeNull();
+
+    // ...and its successor must exist, be unused, and stay in the SAME family
+    // so revoking the family later reaches the whole chain.
+    const newRow = fakeDb.state.refreshTokens.find(
+      (r) => r.token_hash === sha256(res.body.refreshToken) && r.used_at === null
+    );
+    expect(newRow).toBeDefined();
+    expect(newRow.family_id).toBe("fam-1");
   });
 
   it("rejects a refresh token whose hash no longer matches", async () => {

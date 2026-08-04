@@ -1,5 +1,6 @@
 const bcrypt = require("bcrypt");
 const db = require("../config/db");
+const sessionService = require("../services/sessionService");
 const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 const walletService = require("../services/wallet/walletService");
@@ -74,7 +75,7 @@ async function login(req, res) {
     const { email, password, totpCode, recoveryCode } = parsed.data;
 
     const result = await db.query(
-      `SELECT id, email, full_name, password_hash, role,
+      `SELECT id, email, full_name, password_hash, role, token_version,
               mfa_enabled, mfa_secret, mfa_last_timestep,
               (locked_until IS NOT NULL AND locked_until > now()) AS is_locked
        FROM admins
@@ -170,7 +171,13 @@ async function login(req, res) {
         // SEC-15.4 authorization tier, deliberately a SEPARATE claim. Folding
         // it into `role` would make one field answer both "is this an admin"
         // and "how much may it do", which is how those concerns get conflated.
-        adminRole: admin.role
+        adminRole: admin.role,
+        // SEC-15.3 (Phase 6): the session epoch, checked by
+        // adminAuthMiddleware on every request. Until now an admin token in
+        // the dashboard's localStorage could not be stopped before its 2h
+        // `exp`, so an XSS bought the attacker the remainder of that window
+        // with no way to intervene.
+        tv: typeof admin.token_version === 'number' ? admin.token_version : 0
       },
       process.env.ADMIN_JWT_SECRET,
       {
@@ -291,8 +298,105 @@ async function adjustUserBalance(req, res) {
   }
 }
 
+/**
+ * POST /api/admin/users/:id/suspend      (SEC-18.2, Phase 6)
+ * POST /api/admin/users/:id/reinstate
+ *
+ * Suspension that takes effect on the abuser's very NEXT request, not at their
+ * next login. That distinction is the whole finding: an account worth
+ * suspending is precisely the one that will never voluntarily re-authenticate,
+ * so a status flag checked only at login would let a running session continue
+ * spending credits and generating images for up to the full hour left on its
+ * access token.
+ *
+ * Three writes make it immediate:
+ *   1. status            - refused by authMiddleware, login, refresh, Google.
+ *   2. token_version + 1 - every outstanding access token mismatches at once.
+ *   3. family revocation - no refresh token can mint a replacement.
+ *
+ * Audit rows are written by the global auditAdminAction middleware, which
+ * self-gates on req.admin + a mutating method + a 2xx response, so these
+ * endpoints are recorded without registering anything per-route.
+ */
+const SUSPENDABLE_STATUSES = new Set(["suspended", "banned"]);
+
+async function setUserStatus(req, res, { status, reason }) {
+  const { id } = req.params;
+
+  if (!/^[0-9a-fA-F-]{36}$/.test(id || "")) {
+    return res.status(400).json({ message: "A valid user id is required." });
+  }
+
+  const client = await db.pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Status and epoch move in ONE statement. Split across two, a crash
+    // between them would leave an account marked suspended whose live tokens
+    // still worked - the exact failure this endpoint exists to prevent.
+    const updated = await client.query(
+      `UPDATE public.users
+       SET status = $1,
+           status_reason = $2,
+           status_changed_at = now(),
+           status_changed_by = $3,
+           token_version = token_version + 1,
+           refresh_token_hash = NULL
+       WHERE id = $4
+       RETURNING id, email, status, token_version`,
+      [status, reason || null, req.admin.id, id]
+    );
+
+    if (updated.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ message: "No user found with this id." });
+    }
+
+    await sessionService.revokeAllUserRefreshTokens(
+      id,
+      status === "active" ? "admin_reinstate" : `admin_${status}`,
+      client
+    );
+
+    await client.query("COMMIT");
+
+    const row = updated.rows[0];
+    return res.json({
+      id: row.id,
+      email: row.email,
+      status: row.status,
+      tokenVersion: row.token_version,
+    });
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch (_) { /* already failed */ }
+    console.error("[admin] setUserStatus failed:", err.message);
+    return res.status(500).json({ message: "Internal server error." });
+  } finally {
+    client.release();
+  }
+}
+
+async function suspendUser(req, res) {
+  const status = req.body && typeof req.body.status === "string" ? req.body.status : "suspended";
+  if (!SUSPENDABLE_STATUSES.has(status)) {
+    return res.status(400).json({ message: "status must be 'suspended' or 'banned'." });
+  }
+  const reason = req.body && typeof req.body.reason === "string" ? req.body.reason.slice(0, 500) : null;
+  return setUserStatus(req, res, { status, reason });
+}
+
+async function reinstateUser(req, res) {
+  // Reinstating also bumps token_version. It does not need to for security,
+  // but it keeps one rule - "any status change ends existing sessions" -
+  // instead of two, and a reinstated user signing in fresh is the clearer
+  // outcome than one whose pre-suspension tokens quietly resume working.
+  return setUserStatus(req, res, { status: "active", reason: null });
+}
+
 module.exports = {
   login,
   searchUserByEmail,
   adjustUserBalance,
+  suspendUser,
+  reinstateUser,
 };
