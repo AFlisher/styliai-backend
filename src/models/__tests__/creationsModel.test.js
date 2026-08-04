@@ -4,6 +4,7 @@ jest.mock("../../config/db", () => ({
 
 const db = require("../../config/db");
 const { getCreationsByUser, addCreation, deleteCreation } = require("../creationsModel");
+const { CREATIONS_PAGE_DEFAULT } = require("../../utils/pagination");
 
 describe("creationsModel", () => {
   beforeEach(() => {
@@ -18,12 +19,16 @@ describe("creationsModel", () => {
       const result = await getCreationsByUser("user-1");
 
       expect(result).toEqual(rows);
-      expect(db.query).toHaveBeenCalledWith(
-        expect.stringContaining("FROM creations"),
-        ["user-1"]
-      );
+      expect(db.query.mock.calls[0][0]).toEqual(expect.stringContaining("FROM creations"));
       expect(db.query.mock.calls[0][0]).toEqual(expect.stringContaining("WHERE user_id = $1"));
-      expect(db.query.mock.calls[0][0]).toEqual(expect.stringContaining("ORDER BY created_at DESC"));
+      // SEC-19.2: `id DESC` is the tiebreaker that makes the ordering total,
+      // which is what a keyset cursor requires to be correct.
+      expect(db.query.mock.calls[0][0]).toEqual(
+        expect.stringContaining("ORDER BY created_at DESC, id DESC")
+      );
+      // Bounded even though this caller passed no options - the model defaults
+      // its own ceiling rather than trusting the caller to supply one.
+      expect(db.query.mock.calls[0][1]).toEqual(["user-1", CREATIONS_PAGE_DEFAULT + 1]);
     });
   });
 

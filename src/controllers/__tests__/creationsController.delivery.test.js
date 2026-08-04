@@ -38,8 +38,8 @@ const SIGNED = "https://proj.supabase.co/storage/v1/object/sign/creations/origin
 
 const BACKEND = "https://api.styli.test";
 
-function makeReqRes({ params = {}, user = { id: "u-1" } } = {}) {
-  const req = { params, user, protocol: "https", get: () => "api.styli.test" };
+function makeReqRes({ params = {}, user = { id: "u-1" }, query = {} } = {}) {
+  const req = { params, user, query, protocol: "https", get: () => "api.styli.test" };
   const res = {
     status: jest.fn().mockReturnThis(),
     json: jest.fn().mockReturnThis(),
@@ -266,8 +266,12 @@ describe("SEC-8.1B-2 — failing safe when the origin cannot be resolved", () =>
       { id: "c-1", imageUrl: IMAGE_URL, thumbnailUrl: THUMB_URL },
     ]);
     // A request object with no `get`, i.e. no derivable host.
-    const req = { params: {}, user: { id: "u-1" } };
-    const res = { status: jest.fn().mockReturnThis(), json: jest.fn().mockReturnThis() };
+    const req = { params: {}, user: { id: "u-1" }, query: {} };
+    const res = {
+      status: jest.fn().mockReturnThis(),
+      json: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+    };
 
     await getCreations(req, res);
 

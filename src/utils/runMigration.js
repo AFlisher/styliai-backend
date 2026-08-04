@@ -62,7 +62,8 @@ const MIGRATIONS = [
   'migration_admin_mfa.sql',                   // SEC-15.2 (references admins)
   'migration_admin_audit_log.sql',             // SEC-15.1 (alters wallet_transactions)
   'migration_integrity_verdicts.sql',          // SEC-0.4
-  'migration_session_revocation.sql'           // Phase 6: SEC-1.4/1.5/15.3/18.2 + token_version
+  'migration_session_revocation.sql',           // Phase 6: SEC-1.4/1.5/15.3/18.2 + token_version
+  'migration_generation_idempotency.sql'        // Phase 7: SEC-3.1 (references users)
 ];
 
 /**

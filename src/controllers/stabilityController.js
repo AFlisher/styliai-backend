@@ -31,10 +31,15 @@ const CREATION_STYLE_NAME = "Stability AI Text-to-Image";
 // through unexamined - a 50,000-character prompt and a nonsense aspect ratio
 // both reached the provider verbatim (measured, not assumed).
 //
-// These bounds are deliberately applied to the ADMIN path only. The
-// user-facing generateImage below is the same class of gap but is tracked
-// separately as SEC-9.2, and it is bounded meanwhile by an atomic wallet
-// charge that this path has no equivalent of.
+// SEC-9.2 (Phase 7) - these bounds now apply to BOTH paths. The paragraph
+// above described the state before this phase: the admin preview was bounded
+// and the user-facing generateImage below was not, because the wallet charge
+// gave the user path a cost ceiling the admin path lacked. That made the gap
+// lower-risk, not closed - a credit bought a 100 kB prompt and an unvalidated
+// aspect_ratio, both forwarded verbatim to a metered provider that would
+// reject them, costing a round-trip and forcing a refund. The same validator
+// is now shared by both, which is the whole reason it was written as a
+// standalone function rather than inline.
 // ---------------------------------------------------------------------------
 
 // Stability's own documented ceiling for this endpoint. Also >2x the largest
@@ -65,18 +70,34 @@ const ALLOWED_STYLE_PRESETS = new Set([
 ]);
 
 /**
- * Validates the admin preview payload, throwing a 400 AppError on the first
+ * Validates generation parameters, throwing a 400 AppError on the first
  * problem. Runs entirely locally - no provider call is made for input we can
  * reject ourselves, which is the point.
  *
- * @returns {{prompt: string, negativePrompt: string|undefined, aspectRatio: string|undefined, style: string|undefined}}
+ * `requirePrompt` is the only difference between the two callers. The admin
+ * preview has no style catalog behind it, so a prompt is mandatory; the
+ * user-facing endpoint accepts `styleId` INSTEAD of a prompt and resolves the
+ * text server-side afterwards, so an absent prompt is legal there and is
+ * checked after resolution.
+ *
+ * @returns {{prompt: string|undefined, negativePrompt: string|undefined, aspectRatio: string|undefined, style: string|undefined}}
  */
-function validatePreviewInput({ prompt, negativePrompt, aspectRatio, style }) {
-  if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
-    throw new AppError(ErrorCodes.VALIDATION_ERROR, "prompt is required.", 400);
+function validateGenerationParams(
+  { prompt, negativePrompt, aspectRatio, style },
+  { requirePrompt = true } = {}
+) {
+  // Absent is only acceptable when the caller may supply a styleId instead.
+  // Present-but-unusable (empty string, non-string) is always a refusal, even
+  // on the optional path: falling through to style resolution would generate
+  // something other than what was asked for.
+  const promptSupplied = prompt !== undefined && prompt !== null;
+  if (requirePrompt || promptSupplied) {
+    if (typeof prompt !== "string" || !prompt.trim()) {
+      throw new AppError(ErrorCodes.VALIDATION_ERROR, "prompt is required.", 400);
+    }
   }
 
-  if (prompt.length > MAX_PROMPT_LENGTH) {
+  if (typeof prompt === "string" && prompt.length > MAX_PROMPT_LENGTH) {
     throw new AppError(
       ErrorCodes.VALIDATION_ERROR,
       `prompt must be at most ${MAX_PROMPT_LENGTH} characters.`,
@@ -108,6 +129,16 @@ function validatePreviewInput({ prompt, negativePrompt, aspectRatio, style }) {
   }
 
   return { prompt, negativePrompt, aspectRatio, style };
+}
+
+/**
+ * The admin-preview caller (SEC-15.8). Retained as a named wrapper because it
+ * is part of this module's exported surface and is asserted directly by tests -
+ * the bounds on a paid endpoint are a security property, not an implementation
+ * detail, so the name they are asserted through stays stable.
+ */
+function validatePreviewInput(input) {
+  return validateGenerationParams(input, { requirePrompt: true });
 }
 
 // Maps a StabilityApiError.kind to an AppError so the global error handler
@@ -201,6 +232,21 @@ async function generateImage(req, res, next) {
     const { styleId } = req.body;
     const userId = req.user.id;
 
+    // SEC-9.2: bound the CLIENT-SUPPLIED parameters first - before the style
+    // lookup, before the wallet charge, and before anything reaches the paid
+    // provider. Ordering is the security-relevant part: validation that runs
+    // after the deduction turns a rejected request into a charge-and-refund
+    // pair, and validation that runs after the provider call is not validation
+    // at all, it is a second opinion on something already paid for.
+    //
+    // `requirePrompt: false` because this endpoint legitimately accepts a
+    // styleId INSTEAD of prompt text; the resolved-prompt check below still
+    // guarantees something usable exists before proceeding.
+    validateGenerationParams(
+      { prompt, negativePrompt, aspectRatio, style },
+      { requirePrompt: false }
+    );
+
     let resolvedStyle = null;
     if ((!prompt || !prompt.trim()) && styleId) {
       resolvedStyle = await styleModel.getStyleById(styleId);
@@ -212,6 +258,12 @@ async function generateImage(req, res, next) {
       }
     }
 
+    // Deliberately NOT re-run through validateGenerationParams: `prompt` may
+    // now hold catalog text this server owns, and applying a user-input length
+    // cap to our own curated data would turn an over-long style - an operator
+    // mistake, fixable in the dashboard - into a 400 blaming the user for it.
+    // The client-supplied values were already bounded above; this is only the
+    // "something usable exists" check.
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       throw new AppError(ErrorCodes.VALIDATION_ERROR, "prompt is required.", 400);
     }
@@ -357,6 +409,8 @@ module.exports = {
   // Exported for tests: the bounds on a paid endpoint are a security property,
   // so they are asserted directly rather than inferred from behaviour.
   validatePreviewInput,
+  // SEC-9.2: the shared validator both generation paths now run through.
+  validateGenerationParams,
   MAX_PROMPT_LENGTH,
   MAX_NEGATIVE_PROMPT_LENGTH,
   ALLOWED_ASPECT_RATIOS,

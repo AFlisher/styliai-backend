@@ -4,6 +4,7 @@ jest.mock("../../config/db", () => ({ query: jest.fn(), pool: { connect: jest.fn
 
 const db = require("../../config/db");
 const { getAllCategories, getPublicCategories } = require("../categoryModel");
+const { CATALOG_PAGE_MAX } = require("../../utils/pagination");
 
 /** Collapses whitespace so SQL can be compared without formatting noise. */
 function normalize(sql) {
@@ -45,9 +46,15 @@ describe("getPublicCategories", () => {
     expect(columnsOf(publicSql)).toBe(columnsOf(adminSql));
   });
 
-  it("takes no parameters, so nothing caller-controlled reaches the query", async () => {
+  it("binds only the server-side catalog ceiling, so nothing caller-controlled reaches the query", async () => {
+    // SEC-19.2 added a LIMIT, so this is no longer parameterless. The property
+    // it was written to protect is unchanged and is what is asserted here: the
+    // single bound value is a server constant, not derived from any request.
+    // Asserting "no parameters at all" would now fail for a reason that has
+    // nothing to do with caller control, which would make it a test of the
+    // implementation rather than of the guarantee.
     await getPublicCategories();
-    expect(db.query.mock.calls[0][1]).toBeUndefined();
+    expect(db.query.mock.calls[0][1]).toEqual([CATALOG_PAGE_MAX]);
   });
 });
 

@@ -8,6 +8,7 @@ const { optionalAdminAuth } = require("../middleware/adminAuthMiddleware");
 const { requireAdminRoleFor } = require("../middleware/requireAdminRole");
 const authMiddleware = require("../middleware/authMiddleware");
 const { publicReadLimiter, adminActionLimiter } = require("../middleware/rateLimiters");
+const { uuidParams } = require("../middleware/validateRequest");
 
 // optionalAdminAuth is additive and non-rejecting (verifies the admin
 // secret; an anonymous or mobile caller is unaffected). requireUserOrAdmin
@@ -21,15 +22,15 @@ const { publicReadLimiter, adminActionLimiter } = require("../middleware/rateLim
 // style manager, so it always gets the generous publicReadLimiter rather
 // than the stricter adminActionLimiter, regardless of which caller hits it.
 router.get("/", publicReadLimiter, optionalAdminAuth, authMiddleware.requireUserOrAdmin, styleController.getStyles);
-router.get("/:id/similar", publicReadLimiter, authMiddleware, recommendationController.getSimilarStyles);
+router.get("/:id/similar", publicReadLimiter, authMiddleware, uuidParams("id"), recommendationController.getSimilarStyles);
 // SEC-15.4: tiers come from src/config/adminRoutePolicy.js, not from here.
 router.post("/", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/styles"), styleController.createStyle);
 // Admin-only live prompt preview - renders the final prompt with sample
 // values. Placed before "/:id" routes so "prompt-preview" isn't captured as an id.
 router.post("/prompt-preview", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/styles/prompt-preview"), styleController.previewPrompt);
 router.put("/reorder", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("PUT /api/styles/reorder"), styleController.reorderStyles);
-router.put("/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("PUT /api/styles/:id"), styleController.updateStyle);
-router.patch("/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("PATCH /api/styles/:id"), styleController.patchStyleFlags);
-router.delete("/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("DELETE /api/styles/:id"), styleController.deleteStyle);
+router.put("/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("PUT /api/styles/:id"), uuidParams("id"), styleController.updateStyle);
+router.patch("/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("PATCH /api/styles/:id"), uuidParams("id"), styleController.patchStyleFlags);
+router.delete("/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("DELETE /api/styles/:id"), uuidParams("id"), styleController.deleteStyle);
 
 module.exports = router;

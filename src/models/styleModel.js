@@ -1,5 +1,18 @@
 const db = require("../config/db");
 const styleFieldsModel = require("./styleFieldsModel");
+const { CATALOG_PAGE_MAX } = require("../utils/pagination");
+
+/**
+ * SEC-19.2 - a runaway guard on the catalog reads, not a page size.
+ *
+ * These lists are curated admin content: small, slow-growing, and deliberately
+ * fetched whole by the mobile Home screen (a decision already recorded as the
+ * deferred preview-fetch work, which this does not reverse). So the ceiling is
+ * set high enough that no realistic catalog is truncated and low enough that a
+ * catalog which grows unexpectedly - or a filter that stops filtering - cannot
+ * serialise without limit. If a deployment ever legitimately exceeds it, the
+ * fix is real pagination here, not a bigger number.
+ */
 
 async function getAllStyles() {
   const result = await db.query(`
@@ -22,7 +35,8 @@ async function getAllStyles() {
       updated_at AS "updatedAt"
     FROM styles
     ORDER BY sort_order ASC, created_at ASC
-  `);
+    LIMIT $1
+  `, [CATALOG_PAGE_MAX]);
 
   return attachFields(result.rows);
 }
@@ -77,7 +91,8 @@ async function getStyles(filters = {}) {
     query += ` WHERE ${whereClauses.join(' AND ')}`;
   }
 
-  query += ` GROUP BY s.id ORDER BY s.sort_order ASC, s.created_at ASC`;
+  params.push(CATALOG_PAGE_MAX);
+  query += ` GROUP BY s.id ORDER BY s.sort_order ASC, s.created_at ASC LIMIT $${params.length}`;
 
   const result = await db.query(query, params);
   return attachFields(result.rows);
@@ -133,7 +148,8 @@ async function getPublicStyles(filters = {}) {
     query += ` WHERE ${whereClauses.join(' AND ')}`;
   }
 
-  query += ` ORDER BY sort_order ASC, created_at ASC`;
+  params.push(CATALOG_PAGE_MAX);
+  query += ` ORDER BY sort_order ASC, created_at ASC LIMIT $${params.length}`;
 
   const result = await db.query(query, params);
   return attachFields(result.rows);

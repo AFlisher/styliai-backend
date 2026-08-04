@@ -46,11 +46,11 @@ describe("favoritesController", () => {
     });
 
     it("adds the favorite and returns 201", async () => {
-      const { req, res } = makeReqRes({ body: { styleId: "s1" } });
+      const { req, res } = makeReqRes({ body: { styleId: "550e8400-e29b-41d4-a716-446655440000" } });
 
       await addFavorite(req, res);
 
-      expect(favoritesModel.addFavorite).toHaveBeenCalledWith("user-1", "s1");
+      expect(favoritesModel.addFavorite).toHaveBeenCalledWith("user-1", "550e8400-e29b-41d4-a716-446655440000");
       expect(res.status).toHaveBeenCalledWith(201);
     });
 
@@ -58,7 +58,7 @@ describe("favoritesController", () => {
       const fkErr = new Error("violates foreign key constraint");
       fkErr.code = "23503";
       favoritesModel.addFavorite.mockRejectedValue(fkErr);
-      const { req, res } = makeReqRes({ body: { styleId: "does-not-exist" } });
+      const { req, res } = makeReqRes({ body: { styleId: "77777777-7777-4777-8777-777777777777" } });
 
       await addFavorite(req, res);
 
@@ -68,11 +68,11 @@ describe("favoritesController", () => {
 
   describe("removeFavorite", () => {
     it("removes the favorite and returns 204", async () => {
-      const { req, res } = makeReqRes({ params: { styleId: "s1" } });
+      const { req, res } = makeReqRes({ params: { styleId: "550e8400-e29b-41d4-a716-446655440000" } });
 
       await removeFavorite(req, res);
 
-      expect(favoritesModel.removeFavorite).toHaveBeenCalledWith("user-1", "s1");
+      expect(favoritesModel.removeFavorite).toHaveBeenCalledWith("user-1", "550e8400-e29b-41d4-a716-446655440000");
       expect(res.status).toHaveBeenCalledWith(204);
     });
   });

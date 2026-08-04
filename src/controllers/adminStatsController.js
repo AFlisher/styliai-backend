@@ -1,37 +1,9 @@
 const db = require("../config/db");
-const supabase = require("../config/supabase");
-
-/**
- * Sums the size (bytes) of every object in the style-images bucket,
- * paginating past Supabase's default 100-item page size.
- */
-async function getStorageUsedMB() {
-  let totalBytes = 0;
-  let offset = 0;
-  const limit = 100;
-
-  while (true) {
-    const { data, error } = await supabase.storage
-      .from("style-images")
-      .list("", { limit, offset });
-
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-
-    for (const obj of data) {
-      totalBytes += obj.metadata?.size || 0;
-    }
-
-    if (data.length < limit) break;
-    offset += limit;
-  }
-
-  return totalBytes / (1024 * 1024);
-}
+const storageUsageService = require("../services/storageUsageService");
 
 async function getStats(req, res) {
   try {
-    const totalUsersResult = await db.query(
+    const totalUsersResult = await db.analyticsQuery(
       "SELECT COUNT(*)::int AS count FROM users"
     );
 
@@ -39,21 +11,21 @@ async function getStats(req, res) {
     // literal login sessions (nothing tracks those - see
     // DASHBOARD_FUNCTIONAL_GAPS.md for why a true session metric isn't
     // possible without new auth instrumentation).
-    const activeTodayResult = await db.query(
+    const activeTodayResult = await db.analyticsQuery(
       "SELECT COUNT(DISTINCT user_id)::int AS count FROM wallet_transactions WHERE created_at >= CURRENT_DATE"
     );
 
-    const imagesResult = await db.query(
+    const imagesResult = await db.analyticsQuery(
       "SELECT COUNT(*)::int AS count FROM wallet_transactions WHERE type = 'generation'"
     );
 
-    const creditsResult = await db.query(
+    const creditsResult = await db.analyticsQuery(
       "SELECT COALESCE(SUM(ABS(amount)), 0)::int AS total FROM wallet_transactions WHERE type = 'generation'"
     );
 
     // Always 7 rows (today + preceding 6 days), zero-filled for days with
     // no generation activity, so the chart never has misleading gaps.
-    const chartResult = await db.query(`
+    const chartResult = await db.analyticsQuery(`
       SELECT
         to_char(d.day, 'Dy') AS label,
         COALESCE(COUNT(wt.id), 0)::int AS value
@@ -64,7 +36,7 @@ async function getStats(req, res) {
       ORDER BY d.day
     `);
 
-    const recentActivityResult = await db.query(`
+    const recentActivityResult = await db.analyticsQuery(`
       SELECT
         wt.id,
         u.email AS "userEmail",
@@ -77,14 +49,30 @@ async function getStats(req, res) {
       LIMIT 10
     `);
 
-    const storageUsedMB = await getStorageUsedMB();
+    // SEC-19.1: served from a TTL cache behind a single-flight latch, so a
+    // dashboard refresh no longer starts a full bucket walk (and repeated
+    // refreshes no longer start concurrent ones). Never throws - a storage
+    // outage degrades this one card instead of failing the whole endpoint,
+    // whose other six metrics come from Postgres and are unaffected.
+    const storage = await storageUsageService.getStorageUsage();
 
     res.json({
       totalUsers: totalUsersResult.rows[0].count,
       activeToday: activeTodayResult.rows[0].count,
       imagesGenerated: imagesResult.rows[0].count,
       creditsUsed: creditsResult.rows[0].total,
-      storageUsedMB: Math.round(storageUsedMB * 100) / 100,
+      // Unchanged field name, unchanged units, unchanged rounding - existing
+      // dashboard builds keep working. `null` is the new value only in the
+      // case that previously produced a 500 for the entire response.
+      storageUsedMB:
+        storage.megabytes === null ? null : Math.round(storage.megabytes * 100) / 100,
+      // Additive metadata. The audit asks for an "as of HH:MM" indicator so a
+      // cached figure is not presented as a live one; `truncated` says the
+      // walk hit its page cap and the number is a floor, not a total. Older
+      // dashboard builds ignore all three.
+      storageAsOf: storage.asOf ?? null,
+      storageTruncated: Boolean(storage.truncated),
+      storageObjectCount: storage.objectCount ?? null,
       chartData: chartResult.rows,
       recentActivity: recentActivityResult.rows,
     });
@@ -125,7 +113,7 @@ async function getUsersByCountry(req, res) {
 
   try {
     const dateFilter = countryDateFilterFor(range);
-    const result = await db.query(`
+    const result = await db.analyticsQuery(`
       SELECT
         country_code AS "countryCode",
         country_name AS "countryName",

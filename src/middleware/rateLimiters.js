@@ -345,7 +345,44 @@ const adminActionLimiter = makeLimiter("adminActionLimiter", {
   message: "Too many admin requests. Please slow down.",
 });
 
+// ---------------------------------------------------------------------------
+// Global backstop (mounted once in app.js, above the route table)
+// ---------------------------------------------------------------------------
+
+// SEC-11.1. Not a replacement for any limiter above - a floor under the ones
+// that do not exist.
+//
+// Before this, a request to an unlimited path (`GET /`, or anything that fell
+// through to the 404 handler) was bounded only by how fast the socket could
+// carry it. That is the cheapest possible flood: no auth, no database, no
+// provider call, and no counter anywhere that would show it happening.
+//
+// WHY 600/min, and why the number is the security-relevant part:
+// a backstop set below any route limiter silently BECOMES that route's
+// effective policy, which would quietly undo the reasoning behind each number
+// above - and worse, would do it invisibly, since the route's own limiter
+// would never fire to signal it. So this is sized strictly above the most
+// permissive of them: publicReadLimiter (300/min) and ssvCallbackLimiter
+// (200/min). Google's AdMob SSV callbacks are the case that makes this a
+// correctness requirement rather than a preference: they arrive from a small
+// set of Google IPs on behalf of MANY users, so a backstop that throttled them
+// would drop other people's legitimate ad rewards - a self-inflicted denial of
+// the credit-earning path.
+//
+// Keyed by user id where one is available and IP otherwise. Note that on most
+// paths this runs BEFORE authMiddleware, so req.user is usually unset and the
+// key is the IP - which is the correct key for a backstop whose job is to
+// bound anonymous floods. The user-id branch matters only for the routes that
+// authenticate earlier.
+const globalLimiter = makeLimiter("globalLimiter", {
+  windowMs: MINUTE,
+  limit: 600,
+  keyGenerator: userOrIpKeyGenerator,
+  message: "Too many requests. Please slow down.",
+});
+
 module.exports = {
+  globalLimiter,
   loginLimiter,
   registerLimiter,
   forgotPasswordLimiter,

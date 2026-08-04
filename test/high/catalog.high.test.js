@@ -125,7 +125,7 @@ describe("FT-015 / API-016 — style listing filters", () => {
 
 describe("API-016 — GET /api/styles/:id/similar", () => {
   it("rejects an anonymous caller with 401", async () => {
-    const res = await request(app).get("/api/styles/abc/similar?limit=5");
+    const res = await request(app).get("/api/styles/33333333-3333-4333-8333-333333333333/similar?limit=5");
     expect(res.status).toBe(401);
     expect(recommendationService.getSimilarStyles).not.toHaveBeenCalled();
   });
@@ -133,17 +133,17 @@ describe("API-016 — GET /api/styles/:id/similar", () => {
   it("returns ranked similar styles for an authenticated user", async () => {
     recommendationService.getSimilarStyles.mockResolvedValue([{ id: "sim1" }]);
     const res = await request(app)
-      .get("/api/styles/abc/similar?limit=5")
+      .get("/api/styles/33333333-3333-4333-8333-333333333333/similar?limit=5")
       .set("Authorization", `Bearer ${userToken("u1")}`);
     expect(res.status).toBe(200);
-    expect(recommendationService.getSimilarStyles).toHaveBeenCalledWith({ styleId: "abc", limit: 5 });
+    expect(recommendationService.getSimilarStyles).toHaveBeenCalledWith({ styleId: "33333333-3333-4333-8333-333333333333", limit: 5 });
     expect(res.body).toHaveLength(1);
   });
 
   it("returns 404 for an unknown anchor style", async () => {
     recommendationService.getSimilarStyles.mockResolvedValue(null);
     const res = await request(app)
-      .get("/api/styles/missing/similar")
+      .get("/api/styles/44444444-4444-4444-8444-444444444444/similar")
       .set("Authorization", `Bearer ${userToken("u1")}`);
     expect(res.status).toBe(404);
   });
@@ -153,7 +153,7 @@ describe("FT-022 / IT-005 — admin toggles trending; the trending filter reflec
   it("admin PUT updates the style, and the trending read filters by isTrending", async () => {
     styleModel.updateStyle.mockResolvedValue({ id: "s7", isTrending: true });
     const put = await request(app)
-      .put("/api/styles/s7")
+      .put("/api/styles/55555555-5555-4555-8555-555555555555")
       .set("Authorization", `Bearer ${adminToken()}`)
       .send({ categoryId: "cat-1", name: "Trendy", prompt: "p", isTrending: true, autoAssignTags: false });
     expect(put.status).toBe(200);

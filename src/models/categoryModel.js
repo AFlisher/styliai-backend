@@ -1,4 +1,8 @@
 const db = require("../config/db");
+const { CATALOG_PAGE_MAX } = require("../utils/pagination");
+
+// SEC-19.2: same runaway guard as styleModel - a ceiling on a curated,
+// slow-growing list that is deliberately fetched whole, not a page size.
 
 /**
  * Every category, including disabled ones. Admin-only - see
@@ -16,7 +20,8 @@ async function getAllCategories() {
       updated_at AS "updatedAt"
     FROM categories
     ORDER BY sort_order ASC
-  `);
+    LIMIT $1
+  `, [CATALOG_PAGE_MAX]);
 
   return result.rows;
 }
@@ -45,7 +50,8 @@ async function getPublicCategories() {
     FROM categories
     WHERE is_enabled = true
     ORDER BY sort_order ASC
-  `);
+    LIMIT $1
+  `, [CATALOG_PAGE_MAX]);
 
   return result.rows;
 }

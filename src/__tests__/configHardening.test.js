@@ -79,6 +79,24 @@ describe("no secret is committed", () => {
       for (const match of source.matchAll(/process\.env\.([A-Z0-9_]+)/g)) {
         referenced.add(match[1]);
       }
+      // Phase 7: config helpers that read the environment INDIRECTLY.
+      //
+      // `process.env.X` was the only pattern this scanned, so a variable read
+      // through a helper that takes an `env` object - config/db.js's
+      // poolSetting(name, fallback, env) reaching env[name] - was invisible to
+      // it. That is not a hypothetical: the SEC-19.3 pool bounds are all read
+      // that way, and every one of them would have shipped undocumented while
+      // this test stayed green. Matching the quoted literal passed to those
+      // helpers restores the completeness guarantee for the indirect form.
+      for (const match of source.matchAll(
+        /(?:poolSetting|envFlag|envInt)\(\s*['"]([A-Z0-9_]+)['"]/g
+      )) {
+        referenced.add(match[1]);
+      }
+      // Bare `env.X` destructured off an injected environment object.
+      for (const match of source.matchAll(/\benv\.([A-Z][A-Z0-9_]{2,})\b/g)) {
+        referenced.add(match[1]);
+      }
     }
 
     const undocumented = [...referenced].filter((name) => !docs.includes(name));

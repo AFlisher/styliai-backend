@@ -9,7 +9,9 @@
 
 require("../critical/setupEnv");
 
-jest.mock("../../src/config/db", () => ({ query: jest.fn(), pool: { connect: jest.fn() }, buildSslConfig: () => false }));
+// SEC-19.3: admin analytics go through analyticsQuery (scoped, larger
+// statement_timeout); everything else still uses query.
+jest.mock("../../src/config/db", () => ({ query: jest.fn(), analyticsQuery: jest.fn(), pool: { connect: jest.fn() }, buildSslConfig: () => false }));
 jest.mock("../../src/config/supabase", () => ({
   storage: { from: () => ({ list: jest.fn().mockResolvedValue({ data: [], error: null }) }) },
 }));
@@ -28,7 +30,7 @@ beforeEach(() => jest.clearAllMocks());
 
 describe("FT-024 / IT-008 — admin analytics", () => {
   it("returns the analytics payload for an authorized admin", async () => {
-    db.query
+    db.analyticsQuery
       .mockResolvedValueOnce({ rows: [{ count: 42 }] })   // total users
       .mockResolvedValueOnce({ rows: [{ count: 7 }] })    // active today
       .mockResolvedValueOnce({ rows: [{ count: 120 }] })  // images generated

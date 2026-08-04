@@ -9,6 +9,7 @@ const verifyIntegrity = require("../middleware/verifyIntegrity");
 const interpretIntegrity = require("../middleware/interpretIntegrity");
 const enforceIntegrity = require("../middleware/enforceIntegrity");
 const { generationLimiter } = require("../middleware/rateLimiters");
+const { idempotency } = require("../middleware/idempotency");
 
 /**
  * Route definition for AI Generation.
@@ -41,6 +42,15 @@ router.post(
   // SEC-0.5: the first layer allowed to refuse. Endpoint ceiling and the
   // global kill switch both live in config/integrityPolicy.js.
   enforceIntegrity,
+  // SEC-3.1: last middleware before the controller, which is where the wallet
+  // deduction and the paid provider call happen. Everything above it can still
+  // refuse the request for free; from here on it costs money, so this is the
+  // point at which a duplicate has to be caught. It also runs after
+  // upload.array so the fingerprint can include the source images - retrying
+  // "the same request" with a different photo is a different request.
+  //
+  // No key header ⇒ no-op, so existing clients are unaffected.
+  idempotency({ endpoint: "POST /api/generate" }),
   generateController.generateImage
 );
 

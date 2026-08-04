@@ -8,6 +8,8 @@ const requestLogger = require('./middleware/requestLogger');
 const healthController = require('./controllers/healthController');
 const { logger } = require('./utils/logger');
 const { logUnexpectedError, logValidationFailure } = require('./utils/securityEvents');
+const { globalLimiter } = require('./middleware/rateLimiters');
+const { toClientError } = require('./middleware/validateRequest');
 
 const authRoutes = require('./routes/authRoutes');
 const adminRoutes = require('./routes/adminRoutes');
@@ -149,8 +151,26 @@ app.use(requestLogger);
 // so without this, every /api/ai/generate token would report a request
 // mismatch. The buffer is the one express.json already allocated; this just
 // keeps a reference instead of dropping it.
+// SEC-9.4: the payload ceiling, stated rather than inherited.
+//
+// This was `express.json()` with no options, which means body-parser's 100kb
+// default applied. The default was doing real work - oversized-JSON DoS was
+// already bounded - but nothing in the repository said so, so the only way to
+// learn the API's request-size contract was to know body-parser's default, and
+// a future body-parser major changing it would silently change this API's
+// limits. 100kb is carried over deliberately: it is what production has been
+// enforcing all along, so writing it down is a no-op for every existing client
+// (attack prevented: none newly, resource-exhaustion posture made explicit and
+// tunable; compatibility impact: zero - identical value).
+//
+// Env-overridable so an incident (or a legitimately larger payload) is a
+// configuration change rather than a deploy, matching the convention already
+// used by rateLimiters.js and config/db.js.
+const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '100kb';
+
 app.use(
   express.json({
+    limit: JSON_BODY_LIMIT,
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
@@ -167,8 +187,32 @@ app.use(auditAdminAction);
 // Phase 5: liveness and readiness. Unauthenticated and deliberately terse -
 // see healthController for what they must not disclose. Registered before the
 // API routes so a probe never depends on anything below it.
+//
+// Deliberately mounted ABOVE globalLimiter: a liveness probe that can be rate
+// limited is a liveness probe that reports the service as down when it is
+// merely busy, which is how a traffic spike becomes a restart loop.
 app.get('/healthz', healthController.healthz);
 app.get('/readyz', healthController.readyz);
+
+// SEC-11.1: the backstop.
+//
+// Every route group already carries a purpose-built limiter, and this does not
+// replace any of them - it catches what they cannot: routes with no limiter at
+// all (`GET /`), the 404 handler (previously unlimited, so an attacker could
+// spray nonexistent paths at whatever rate the socket allowed), and any route
+// added later whose author forgets one. Defence in depth against the mistake,
+// not against the traffic.
+//
+// Sizing is the whole design here. A backstop must sit strictly ABOVE every
+// per-route limiter, or it silently becomes the real policy and the carefully
+// argued per-route numbers stop being what is enforced. The most permissive
+// route limiter is publicReadLimiter at 300/min, followed by ssvCallbackLimiter
+// at 200/min - and that second one matters, because it is Google's AdMob SSV
+// callback arriving on behalf of many users from a small set of IPs, so
+// throttling it drops other users' legitimate ad rewards. 600/min leaves 2x
+// headroom over the highest of them, which means this limiter can only ever
+// fire on a path that no other limiter is governing. See rateLimiters.js.
+app.use(globalLimiter);
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -205,6 +249,19 @@ app.use((req, res, next) => {
 // name. An AppError's message is deliberate, author-written, user-facing text;
 // anything else collapses to one fixed sentence.
 app.use((err, req, res, next) => {
+  // SEC-9.1: a malformed JSON body, an oversized payload, or a Postgres error
+  // that was actually caused by the request are all client-caused refusals
+  // that used to arrive here unrecognised and leave as 500s. Translated to an
+  // AppError first, so they flow through exactly the same reporting and
+  // logging path as every other 4xx below rather than getting a second,
+  // parallel implementation. Anything toClientError does not recognise returns
+  // null and keeps its existing behaviour - a genuine server fault is never
+  // relabelled as the caller's fault.
+  const clientError = err && err.isAppError ? null : toClientError(err);
+  if (clientError) {
+    err = clientError;
+  }
+
   if (err && err.isAppError) {
     // Client-caused refusals are logged as validation events rather than as
     // errors: they are the API working, and drowning the error stream in them

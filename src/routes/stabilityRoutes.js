@@ -8,6 +8,7 @@ const interpretIntegrity = require("../middleware/interpretIntegrity");
 const enforceIntegrity = require("../middleware/enforceIntegrity");
 const concurrentGenerationLimiter = require("../middleware/concurrentGenerationLimiter");
 const { generationLimiter } = require("../middleware/rateLimiters");
+const { idempotency } = require("../middleware/idempotency");
 
 /**
  * Route definitions for Stability AI text-to-image generation.
@@ -22,6 +23,9 @@ const { generationLimiter } = require("../middleware/rateLimiters");
  * keyed by user id regardless of which of the two endpoints was called.
  */
 // SEC-0.2: verifyIntegrity annotates req.integrity and never denies.
-router.post("/generate", generationLimiter, authMiddleware, concurrentGenerationLimiter, verifyIntegrity, interpretIntegrity, enforceIntegrity, stabilityController.generateImage);
+// SEC-3.1: mounted immediately before the controller - the last point at
+// which a duplicate can be caught for free, since the controller deducts
+// credits and calls the metered provider. Absent header ⇒ no-op.
+router.post("/generate", generationLimiter, authMiddleware, concurrentGenerationLimiter, verifyIntegrity, interpretIntegrity, enforceIntegrity, idempotency({ endpoint: "POST /api/ai/generate" }), stabilityController.generateImage);
 
 module.exports = router;

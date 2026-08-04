@@ -6,10 +6,19 @@ jest.mock("../../models/creationsModel", () => ({
 
 const creationsModel = require("../../models/creationsModel");
 const { getCreations, deleteCreation, migrateCreations } = require("../creationsController");
+const { CREATIONS_PAGE_DEFAULT } = require("../../utils/pagination");
 
-function makeReqRes({ params = {}, body = {} } = {}) {
-  const req = { user: { id: "user-1" }, params, body };
-  const res = { status: jest.fn().mockReturnThis(), json: jest.fn(), send: jest.fn() };
+function makeReqRes({ params = {}, body = {}, query = {} } = {}) {
+  const req = { user: { id: "user-1" }, params, body, query };
+  // `set` is present because SEC-19.2 returns pagination state in response
+  // headers; a double without it would fail for a reason unrelated to the
+  // behaviour under test.
+  const res = {
+    status: jest.fn().mockReturnThis(),
+    json: jest.fn(),
+    send: jest.fn(),
+    set: jest.fn().mockReturnThis(),
+  };
   return { req, res };
 }
 
@@ -30,7 +39,14 @@ describe("creationsController", () => {
 
       await getCreations(req, res);
 
-      expect(creationsModel.getCreationsByUser).toHaveBeenCalledWith("user-1");
+      // SEC-19.2: the model is now called with an explicit bound. Asserting the
+      // options object rather than dropping the assertion keeps the property
+      // that matters visible - a page size is always supplied, never left to
+      // chance.
+      expect(creationsModel.getCreationsByUser).toHaveBeenCalledWith("user-1", {
+        limit: CREATIONS_PAGE_DEFAULT,
+        cursor: null,
+      });
       expect(res.json).toHaveBeenCalledWith([{ id: "c1" }]);
     });
   });

@@ -1,6 +1,47 @@
 const db = require("../config/db");
+const { CREATIONS_PAGE_DEFAULT, CREATIONS_PAGE_MAX } = require("../utils/pagination");
 
-async function getCreationsByUser(userId) {
+/**
+ * SEC-19.2 - one bounded page of a user's creations, newest first.
+ *
+ * The ORDER BY gains `id DESC` as a tiebreaker so the ordering is TOTAL.
+ * Without it, two rows sharing a `created_at` (the column is a plain TIMESTAMP
+ * with no uniqueness, and migrateCreations inserts in a tight loop) have no
+ * defined relative order, and a cursor built on the timestamp alone would
+ * either skip a row or serve one twice on every page boundary.
+ *
+ * The row-value comparison `(created_at, id) < ($2, $3)` is deliberate rather
+ * than an equivalent-looking `created_at < $2 OR (created_at = $2 AND id < $3)`:
+ * Postgres can drive the composite idx_creations_user_created index directly
+ * from the row-value form, so a deep page costs the same as a shallow one.
+ *
+ * `limit + 1` is fetched and the extra row discarded by the caller - that is
+ * how "is there another page?" is answered without a second COUNT query over
+ * the same predicate.
+ */
+async function getCreationsByUser(
+  userId,
+  // Defaulted HERE and not only in the controller. A model whose bound depends
+  // on every caller remembering to pass one is a model with no bound: the
+  // first caller that forgets (a script, a future endpoint, a test) silently
+  // gets `undefined + 1` = NaN and an unbounded LIMIT clause. The ceiling has
+  // to live with the query it protects.
+  { limit = CREATIONS_PAGE_DEFAULT, cursor = null } = {}
+) {
+  const safeLimit = Number.isFinite(limit) && limit > 0
+    ? Math.min(Math.floor(limit), CREATIONS_PAGE_MAX)
+    : CREATIONS_PAGE_DEFAULT;
+
+  const params = [userId];
+  let predicate = "";
+
+  if (cursor) {
+    params.push(cursor.createdAt, cursor.id);
+    predicate = `AND (created_at, id) < ($${params.length - 1}::timestamp, $${params.length}::uuid)`;
+  }
+
+  params.push(safeLimit + 1);
+
   const result = await db.query(
     `
     SELECT
@@ -12,9 +53,11 @@ async function getCreationsByUser(userId) {
       created_at AS "createdAt"
     FROM creations
     WHERE user_id = $1
-    ORDER BY created_at DESC
+    ${predicate}
+    ORDER BY created_at DESC, id DESC
+    LIMIT $${params.length}
     `,
-    [userId]
+    params
   );
   return result.rows;
 }

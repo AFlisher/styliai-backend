@@ -77,6 +77,39 @@ Values are **never** recorded here. Development values are what a local
 | `GEMINI_MODEL` | Generation model id | see config |
 | `RATE_LIMIT_<LIMITER>_LIMIT` / `_WINDOW_MS` | Per-limiter override (§6) | Built-in defaults |
 
+### Request limits, pool bounds and idempotency (Phase 7)
+
+Every value below is a **bound**, not a feature switch. Each defaults to a safe
+value, and an unparseable or non-positive override is **ignored with a warning**
+rather than applied — a typo must not produce a pool of 0 connections or a 0 ms
+statement timeout. Same convention as the rate-limiter overrides above.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `JSON_BODY_LIMIT` | Max JSON request body (SEC-9.4). Previously body-parser's implicit default; now stated. Exceeding it ⇒ **413** | `100kb` (identical to the prior implicit value) |
+| `DB_POOL_MAX` | Max pooled Postgres connections (SEC-19.3) | `10` (pg's own default, now explicit) |
+| `DB_POOL_IDLE_TIMEOUT_MS` | Idle connection reclaim | `30000` |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | Wait for a free connection before failing fast rather than queueing invisibly | `5000` |
+| `DB_STATEMENT_TIMEOUT_MS` | **Server-side** ceiling on any single statement (SEC-19.3). Firing ⇒ Postgres `57014` ⇒ **503**, not 500 | `10000` |
+| `DB_QUERY_TIMEOUT_MS` | Client-side companion; deliberately longer so the server-side cancel wins | `15000` |
+| `DB_ANALYTICS_STATEMENT_TIMEOUT_MS` | Separate, larger budget scoped to admin analytics via `SET LOCAL` — so the wider aggregates do not require raising the global default for every endpoint | `30000` |
+| `DB_APPLICATION_NAME` | Shows in `pg_stat_activity` for session attribution | `styliai-backend` |
+| `CREATIONS_PAGE_SIZE_DEFAULT` / `CREATIONS_PAGE_SIZE_MAX` | Keyset page size for `GET /api/creations` (SEC-19.2) | `50` / `100` |
+| `CATALOG_PAGE_SIZE_MAX` | Server-enforced ceiling on catalog reads (SEC-19.2) | `500` |
+| `FAVORITES_PAGE_SIZE_MAX` | Ceiling on `GET /api/favorites` (SEC-19.2) | `1000` |
+| `RECOMMENDATION_LIMIT_MAX` | Clamp on `?limit` for `/similar` (SEC-9.3) | `50` |
+| `ADMIN_STORAGE_STATS_TTL_MS` | Cache lifetime for the storage figure (SEC-19.1). `asOf` in the response says how stale it is | `3600000` (1h) |
+| `ADMIN_STORAGE_STATS_MAX_PAGES` | Hard cap on bucket-listing round-trips per refresh; hitting it sets `truncated: true` | `200` (≈20k objects) |
+| `ADMIN_STORAGE_STATS_DEADLINE_MS` | Wall-clock deadline for one refresh | `20000` |
+| `IDEMPOTENCY_TTL_HOURS` | How long a generation `Idempotency-Key` is remembered and replayable (SEC-3.1) | `24` |
+
+> **`DB_STATEMENT_TIMEOUT_MS` is the one to think about before changing.** It is
+> the control that stops a single pathological query from holding a connection
+> until the pool is exhausted and *every* endpoint — including `/healthz` and
+> login — starts failing. Raising it widens that window; setting it very low
+> will start cancelling legitimate admin aggregates (give those headroom via
+> `DB_ANALYTICS_STATEMENT_TIMEOUT_MS` instead).
+
 ### Session revocation and account suspension (Phase 6)
 
 **Everything below takes effect on the user's NEXT request**, not at their next login — that is the point of the phase.

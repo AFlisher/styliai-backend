@@ -1,5 +1,19 @@
 const db = require("../config/db");
 
+/**
+ * SEC-19.3 - every query in this model runs through db.analyticsQuery, not
+ * db.query.
+ *
+ * These are the widest aggregates in the codebase (GROUP BY over the whole of
+ * generation_events, with window functions), and they are the reason the
+ * global statement_timeout could not simply be set to an OLTP-sized value: the
+ * pool default would have to be raised for everyone to accommodate them, which
+ * would hand the longer budget to every unauthenticated endpoint as well.
+ * analyticsQuery gives this admin-only surface its own explicitly larger,
+ * per-transaction budget instead, so both paths stay bounded at the value that
+ * suits them. See config/db.js.
+ */
+
 const STATS_RANGES = new Set(["today", "last7days", "last30days", "allTime"]);
 
 // Mirrors the trailing-window convention already used by
@@ -27,7 +41,7 @@ function dateFilterFor(range, column) {
  * are parameterized by the caller-selected range filter.
  */
 async function getOverview() {
-  const result = await db.query(`
+  const result = await db.analyticsQuery(`
     SELECT
       (SELECT COUNT(*)::int FROM generation_events WHERE success = true) AS "totalGenerations",
       (SELECT COUNT(*)::int FROM generation_events WHERE success = true AND created_at >= CURRENT_DATE) AS "todayGenerations",
@@ -41,7 +55,7 @@ async function getOverview() {
 
 async function getTopStyles(range, limit = 10) {
   const dateFilter = dateFilterFor(range, "ge.created_at");
-  const result = await db.query(
+  const result = await db.analyticsQuery(
     `
     SELECT
       s.id AS "styleId",
@@ -62,7 +76,7 @@ async function getTopStyles(range, limit = 10) {
 
 async function getTopCategories(range, limit = 10) {
   const dateFilter = dateFilterFor(range, "ge.created_at");
-  const result = await db.query(
+  const result = await db.analyticsQuery(
     `
     SELECT
       c.id AS "categoryId",
@@ -84,7 +98,7 @@ async function getTopCategories(range, limit = 10) {
 async function getRatedStyles(range, minFeedbackCount, direction, limit = 10) {
   const dateFilter = dateFilterFor(range, "gf.created_at");
   const order = direction === "asc" ? "ASC" : "DESC";
-  const result = await db.query(
+  const result = await db.analyticsQuery(
     `
     SELECT
       s.id AS "styleId",
@@ -106,7 +120,7 @@ async function getRatedStyles(range, minFeedbackCount, direction, limit = 10) {
 
 async function getGenerationTimeStats(range) {
   const dateFilter = dateFilterFor(range, "created_at");
-  const overallResult = await db.query(`
+  const overallResult = await db.analyticsQuery(`
     SELECT
       ROUND(AVG(generation_time_ms)::numeric, 0)::int AS "avgMs",
       COUNT(*)::int AS "sampleCount"
@@ -115,7 +129,7 @@ async function getGenerationTimeStats(range) {
   `);
 
   const perStyleDateFilter = dateFilterFor(range, "ge.created_at");
-  const perStyleResult = await db.query(`
+  const perStyleResult = await db.analyticsQuery(`
     SELECT
       s.id AS "styleId",
       COALESCE(s.name, 'Deleted style') AS "styleName",
@@ -138,7 +152,7 @@ async function getGenerationTimeStats(range) {
 
 async function getFeedbackSummary(range) {
   const dateFilter = dateFilterFor(range, "created_at");
-  const result = await db.query(`
+  const result = await db.analyticsQuery(`
     SELECT
       ROUND(AVG(rating)::numeric, 2)::float AS "avgRating",
       COUNT(*)::int AS "totalFeedback",
@@ -166,7 +180,7 @@ async function getFeedbackSummary(range) {
 
 async function getRecentFeedback(range, limit = 20) {
   const dateFilter = dateFilterFor(range, "gf.created_at");
-  const result = await db.query(
+  const result = await db.analyticsQuery(
     `
     SELECT
       gf.id,

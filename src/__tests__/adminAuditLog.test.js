@@ -98,7 +98,7 @@ describe("catalog mutations are attributed (SEC-15.1)", () => {
     });
 
     const res = await request(app)
-      .delete("/api/styles/style-9")
+      .delete("/api/styles/66666666-6666-4666-8666-666666666666")
       .set("Authorization", `Bearer ${adminToken()}`);
     expect(res.status).toBe(204);
 
@@ -112,7 +112,7 @@ describe("catalog mutations are attributed (SEC-15.1)", () => {
     expect(entry.adminEmail).toBe(ADMIN.email);
     expect(entry.action).toBe("DELETE /api/styles/:id");
     expect(entry.targetType).toBe("styles");
-    expect(entry.targetId).toBe("style-9");
+    expect(entry.targetId).toBe("66666666-6666-4666-8666-666666666666");
     expect(entry.statusCode).toBe(204);
     // The whole point of RETURNING *: the deletion is reconstructable.
     expect(entry.before).toEqual(removed);
@@ -143,7 +143,7 @@ describe("catalog mutations are attributed (SEC-15.1)", () => {
 
 describe("what never reaches the audit log", () => {
   it("writes nothing for an unauthenticated request", async () => {
-    const res = await request(app).delete("/api/styles/style-9");
+    const res = await request(app).delete("/api/styles/66666666-6666-4666-8666-666666666666");
     expect(res.status).toBe(401);
 
     await flush();
@@ -152,7 +152,7 @@ describe("what never reaches the audit log", () => {
 
   it("writes nothing for a request bearing an invalid admin token", async () => {
     const res = await request(app)
-      .delete("/api/styles/style-9")
+      .delete("/api/styles/66666666-6666-4666-8666-666666666666")
       .set("Authorization", "Bearer not-a-real-token");
     expect(res.status).toBe(401);
 
@@ -200,7 +200,7 @@ describe("fail-open: a catalog edit is not undone by an audit failure", () => {
     });
 
     const res = await request(app)
-      .delete("/api/styles/style-9")
+      .delete("/api/styles/66666666-6666-4666-8666-666666666666")
       .set("Authorization", `Bearer ${adminToken()}`);
 
     // Refusing to serve an already-committed mutation would turn an

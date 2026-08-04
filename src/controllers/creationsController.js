@@ -2,6 +2,13 @@ const creationsModel = require("../models/creationsModel");
 const creationAssetCleanup = require("../services/creationAssetCleanup");
 const supabase = require("../config/supabase");
 const { withDeliveryUrls, VARIANTS } = require("../utils/creationImageUrl");
+const {
+  clampLimit,
+  encodeCursor,
+  decodeCursor,
+  CREATIONS_PAGE_DEFAULT,
+  CREATIONS_PAGE_MAX,
+} = require("../utils/pagination");
 
 const MAX_MIGRATE_ITEMS = 500;
 
@@ -15,13 +22,67 @@ const MAX_MIGRATE_ITEMS = 500;
  */
 const SIGNED_URL_TTL_SECONDS = 300;
 
-async function getCreations(req, res) {
+/**
+ * GET /api/creations?limit=&cursor=
+ *
+ * SEC-19.2 - keyset pagination, added without changing the response shape.
+ *
+ * COMPATIBILITY, which drove the design:
+ * the body is still a bare JSON array, exactly as before. Pagination state
+ * travels in response HEADERS (`X-Next-Cursor`, `X-Has-More`) rather than in
+ * an envelope, because the alternatives are both worse here. Wrapping the
+ * array in `{items, nextCursor}` is a breaking change for every installed
+ * mobile build - and installed binaries cannot be updated in lockstep with a
+ * backend deploy. Returning an envelope only when the caller passes a
+ * parameter gives one endpoint two response shapes, which is a bug generator.
+ * Headers keep exactly one shape and make the client change purely additive:
+ * read a header that older builds already ignore.
+ *
+ * The default page size (50) is above what any current account holds, so this
+ * truncates nothing in practice today - the ceiling is in place BEFORE credit
+ * purchases (SEC-6.1) make large histories reachable, which is the whole point
+ * of doing it in this phase rather than after.
+ */
+async function getCreations(req, res, next) {
   try {
     const userId = req.user.id;
-    const creations = await creationsModel.getCreationsByUser(userId);
+
+    // Express always populates req.query, but this handler is also invoked
+    // directly by unit tests and could be by a future internal caller; a
+    // missing query object must degrade to "first page, default size", not to
+    // a TypeError that the catch below would report as a 500.
+    const query = req.query || {};
+
+    const limit = clampLimit(query.limit, {
+      def: CREATIONS_PAGE_DEFAULT,
+      max: CREATIONS_PAGE_MAX,
+    });
+    // Throws a 400 on a malformed cursor rather than silently restarting at
+    // page one, which would present to a user as a scroll that never ends.
+    const cursor = query.cursor ? decodeCursor(query.cursor) : null;
+
+    // The model fetches limit + 1; the extra row is the "is there more?"
+    // signal and is never returned to the client.
+    const rows = await creationsModel.getCreationsByUser(userId, { limit, cursor });
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    if (hasMore) {
+      const last = page[page.length - 1];
+      res.set("X-Next-Cursor", encodeCursor(last.createdAt, last.id));
+    }
+    res.set("X-Has-More", hasMore ? "true" : "false");
+    // Without this the browser-side dashboard cannot read either header on a
+    // cross-origin response - CORS hides everything not explicitly exposed,
+    // and a pagination header nobody can read is not pagination.
+    res.set("Access-Control-Expose-Headers", "X-Next-Cursor, X-Has-More");
+
     // SEC-8.1B-2: clients receive stable delivery URLs, never storage URLs.
-    res.json(creations.map((creation) => withDeliveryUrls(req, creation)));
+    res.json(page.map((creation) => withDeliveryUrls(req, creation)));
   } catch (err) {
+    // A malformed cursor is an AppError and must reach the global handler as a
+    // 400; only genuinely unexpected failures become the 500 below.
+    if (err && err.isAppError) return next(err);
     console.error(err);
     res.status(500).json({ message: "Failed to load creations." });
   }

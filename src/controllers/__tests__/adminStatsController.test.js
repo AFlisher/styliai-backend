@@ -1,5 +1,11 @@
+// SEC-19.3: admin analytics run through db.analyticsQuery, which applies a
+// separate, larger statement_timeout scoped to one transaction. The mock
+// mirrors that split so this suite exercises the path the controller actually
+// takes - stubbing only `query` would have left the analytics path calling
+// undefined.
 jest.mock("../../config/db", () => ({
   query: jest.fn(),
+  analyticsQuery: jest.fn(),
 }));
 // adminStatsController also pulls in config/supabase for getStats' storage
 // lookup (unused by getUsersByCountry) - stub it out so this suite doesn't
@@ -30,13 +36,13 @@ describe("adminStatsController.getUsersByCountry", () => {
       { countryCode: "US", countryName: "United States", userCount: 8, percentage: 80 },
       { countryCode: "CA", countryName: "Canada", userCount: 2, percentage: 20 },
     ];
-    db.query.mockResolvedValue({ rows });
+    db.analyticsQuery.mockResolvedValue({ rows });
     const { req, res } = makeReqRes();
 
     await getUsersByCountry(req, res);
 
-    expect(db.query).toHaveBeenCalledTimes(1);
-    const [sql] = db.query.mock.calls[0];
+    expect(db.analyticsQuery).toHaveBeenCalledTimes(1);
+    const [sql] = db.analyticsQuery.mock.calls[0];
     expect(sql).toContain("country_code IS NOT NULL");
     expect(sql).toContain("GROUP BY country_code, country_name");
     expect(sql).toContain("ORDER BY \"userCount\" DESC");
@@ -49,12 +55,12 @@ describe("adminStatsController.getUsersByCountry", () => {
     ["last7days", "created_at >= CURRENT_DATE - INTERVAL '6 days'"],
     ["last30days", "created_at >= CURRENT_DATE - INTERVAL '29 days'"],
   ])("applies the %s date filter", async (range, expectedClause) => {
-    db.query.mockResolvedValue({ rows: [] });
+    db.analyticsQuery.mockResolvedValue({ rows: [] });
     const { req, res } = makeReqRes({ query: { range } });
 
     await getUsersByCountry(req, res);
 
-    const [sql] = db.query.mock.calls[0];
+    const [sql] = db.analyticsQuery.mock.calls[0];
     expect(sql).toContain(expectedClause);
     expect(res.json).toHaveBeenCalledWith({ range, countries: [] });
   });
@@ -64,7 +70,7 @@ describe("adminStatsController.getUsersByCountry", () => {
 
     await getUsersByCountry(req, res);
 
-    expect(db.query).not.toHaveBeenCalled();
+    expect(db.analyticsQuery).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("Invalid range") })
@@ -72,7 +78,7 @@ describe("adminStatsController.getUsersByCountry", () => {
   });
 
   it("returns 500 when the query fails", async () => {
-    db.query.mockRejectedValue(new Error("db down"));
+    db.analyticsQuery.mockRejectedValue(new Error("db down"));
     const { req, res } = makeReqRes();
 
     await getUsersByCountry(req, res);

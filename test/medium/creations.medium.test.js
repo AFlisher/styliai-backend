@@ -33,19 +33,19 @@ beforeEach(() => jest.clearAllMocks());
 describe("FT-019 — delete a creation", () => {
   it("deletes the caller's creation and returns 204", async () => {
     creationsModel.deleteCreation.mockResolvedValue(true);
-    const res = await request(app).delete("/api/creations/c-1").set("Authorization", `Bearer ${token("u1")}`);
+    const res = await request(app).delete("/api/creations/11111111-1111-4111-8111-111111111111").set("Authorization", `Bearer ${token("u1")}`);
     expect(res.status).toBe(204);
-    expect(creationsModel.deleteCreation).toHaveBeenCalledWith("u1", "c-1"); // scoped to caller
+    expect(creationsModel.deleteCreation).toHaveBeenCalledWith("u1", "11111111-1111-4111-8111-111111111111"); // scoped to caller
   });
 
   it("returns 404 when the creation does not belong to the caller / does not exist", async () => {
     creationsModel.deleteCreation.mockResolvedValue(false);
-    const res = await request(app).delete("/api/creations/nope").set("Authorization", `Bearer ${token("u1")}`);
+    const res = await request(app).delete("/api/creations/22222222-2222-4222-8222-222222222222").set("Authorization", `Bearer ${token("u1")}`);
     expect(res.status).toBe(404);
   });
 
   it("requires authentication", async () => {
-    const res = await request(app).delete("/api/creations/c-1");
+    const res = await request(app).delete("/api/creations/11111111-1111-4111-8111-111111111111");
     expect(res.status).toBe(401);
   });
 });
@@ -60,7 +60,7 @@ describe("SEC-8.1A — deleting a creation erases its stored objects", () => {
   it("hands the cleanup both stored URLs from the deleted row", async () => {
     creationsModel.deleteCreation.mockResolvedValue(row);
 
-    const res = await request(app).delete("/api/creations/c-1").set("Authorization", `Bearer ${token("u1")}`);
+    const res = await request(app).delete("/api/creations/11111111-1111-4111-8111-111111111111").set("Authorization", `Bearer ${token("u1")}`);
 
     expect(res.status).toBe(204);
     expect(creationAssetCleanup.deleteCreationAssets).toHaveBeenCalledWith({
@@ -75,7 +75,7 @@ describe("SEC-8.1A — deleting a creation erases its stored objects", () => {
     // would be a cross-user destructive bug.
     creationsModel.deleteCreation.mockResolvedValue(undefined);
 
-    const res = await request(app).delete("/api/creations/c-1").set("Authorization", `Bearer ${token("u1")}`);
+    const res = await request(app).delete("/api/creations/11111111-1111-4111-8111-111111111111").set("Authorization", `Bearer ${token("u1")}`);
 
     expect(res.status).toBe(404);
     expect(creationAssetCleanup.deleteCreationAssets).not.toHaveBeenCalled();
@@ -88,7 +88,7 @@ describe("SEC-8.1A — deleting a creation erases its stored objects", () => {
     creationsModel.deleteCreation.mockResolvedValue(row);
     creationAssetCleanup.deleteCreationAssets.mockResolvedValue({ deleted: 0, skipped: [], failed: true });
 
-    const res = await request(app).delete("/api/creations/c-1").set("Authorization", `Bearer ${token("u1")}`);
+    const res = await request(app).delete("/api/creations/11111111-1111-4111-8111-111111111111").set("Authorization", `Bearer ${token("u1")}`);
 
     expect(res.status).toBe(204);
   });
@@ -97,7 +97,7 @@ describe("SEC-8.1A — deleting a creation erases its stored objects", () => {
     creationsModel.deleteCreation.mockResolvedValue(row);
     creationAssetCleanup.deleteCreationAssets.mockRejectedValue(new Error("unexpected"));
 
-    const res = await request(app).delete("/api/creations/c-1").set("Authorization", `Bearer ${token("u1")}`);
+    const res = await request(app).delete("/api/creations/11111111-1111-4111-8111-111111111111").set("Authorization", `Bearer ${token("u1")}`);
 
     // deleteCreationAssets is written never to throw and its unit suite pins
     // that, but a future bug must not be able to answer 500 to a deletion that
