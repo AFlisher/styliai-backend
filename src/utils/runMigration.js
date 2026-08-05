@@ -84,7 +84,8 @@ const MIGRATIONS = [
   'migration_abuse_detection.sql',              // Phase 8: SEC-18.1/18.3/18.5 (alters users + refresh_tokens)
 
   // --- Release blockers ------------------------------------------------------
-  'migration_account_deletion.sql'              // Sprint 1: B-1 erasure attestation (no FK to users, by design)
+  'migration_account_deletion.sql',             // Sprint 1: B-1 erasure attestation (no FK to users, by design)
+  'migration_purchases.sql'                     // Sprint 2: B-3 store-verified purchases (alters credit_packs)
 ];
 
 /**

@@ -63,6 +63,36 @@ Values are **never** recorded here. Development values are what a local
 | `GOOGLE_WEB_CLIENT_ID` | Verifies Google sign-in tokens | For Google sign-in | Real client id |
 | `MFA_ENCRYPTION_KEY` | AES-256-GCM for admin TOTP secrets | Before any enrolment | `openssl rand -base64 32`; distinct from `ADMIN_JWT_SECRET` |
 
+### In-app purchases (Sprint 2 / B-3)
+
+Credits are granted **only** after the platform's own API confirms a purchase.
+With these unset the verifier reports `not_configured` and every redemption
+answers **503 retryable** — the buyer keeps their purchase and nothing is
+credited. That is the intended failure mode; it is never "assume valid".
+
+| Variable | Purpose | Required? | Production requirement |
+|---|---|---|---|
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Service-account JSON, **whole**, for the Android Publisher API. Railway has no file mounts, so it is passed as a variable. | For Android purchases | A service account granted "View financial data" **and** "Manage orders and subscriptions" in Play Console, linked to the app. Contains a private key — treat as a top-tier secret. |
+| `ANDROID_PACKAGE_NAME` | The package the purchase belongs to | For Android purchases | Must equal `applicationId` in `android/app/build.gradle.kts` |
+| `PLAY_VERIFY_TIMEOUT_MS` | Outbound timeout for verify/acknowledge | Optional | Default `10000`. A buyer is watching a spinner; the DB statement timeout does not cover outbound HTTP. |
+| `APPLE_IAP_KEY_ID` | App Store Connect API key id | For iOS purchases | **Apple verification is prepared, not active** — see `src/services/purchases/appleVerifier.js` |
+| `APPLE_IAP_ISSUER_ID` | App Store Connect issuer id | For iOS purchases | as above |
+| `APPLE_IAP_PRIVATE_KEY` | The `.p8` contents | For iOS purchases | as above |
+| `APPLE_BUNDLE_ID` | Bundle id as Apple records it | For iOS purchases | as above |
+
+**Setting the four Apple variables is not sufficient** to enable iOS purchases.
+The JWS signature-chain verification is deliberately unimplemented, and the
+verifier logs `apple_verify_not_implemented` and refuses rather than granting.
+That refusal is the point: a half-finished verifier that decodes a payload
+without checking its signature accepts anything an attacker types.
+
+**SKU mapping.** `credit_packs.product_id` is `NULL` for every seeded pack and
+must be set to the real store SKUs before any purchase can be credited — an
+unmatched product id is refused (`unknown_product`, HTTP 422) rather than
+defaulted to a guess. `GET /api/purchases/config` reports which platforms are
+live; the app uses it to hide the purchase UI rather than take money it cannot
+credit.
+
 ### Optional / tuning
 
 | Variable | Purpose | Default |

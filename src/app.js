@@ -28,6 +28,7 @@ const creationsRoutes = require("./routes/creationsRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const generationFeedbackRoutes = require("./routes/generationFeedbackRoutes");
 const profileRoutes = require("./routes/profileRoutes");
+const purchaseRoutes = require("./routes/purchaseRoutes");
 
 const app = express();
 
@@ -282,6 +283,9 @@ app.use('/api/creations', creationsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/feedback', generationFeedbackRoutes);
 app.use('/api/profile', profileRoutes);
+// Sprint 2 / B-3: server-verified in-app purchases. The only path by which a
+// purchase can create credits.
+app.use('/api/purchases', purchaseRoutes);
 
 // Default endpoint
 app.get('/', (req, res) => {

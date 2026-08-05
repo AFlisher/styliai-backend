@@ -565,6 +565,123 @@ paths:
         '200': { description: Password changed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '400': { description: Validation error / wrong current password / Google account, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
+  /api/purchases/verify:
+    post:
+      summary: >
+        Redeem a store purchase (Sprint 2 / B-3). The ONLY path by which a
+        purchase can create credits. The client supplies an opaque token; the
+        server asks Google/Apple what it is worth and grants the credits its own
+        catalogue maps to the product the PLATFORM reported. Nothing the client
+        says about product or amount is trusted. Idempotent on purchaseToken -
+        redeeming twice credits once and answers 200 both times.
+      security: [{ userBearerAuth: [] }]
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: Deduplicates a retried HTTP request (SEC-3.1).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platform: { type: string, enum: [google, apple] }
+                productId: { type: string, maxLength: 255 }
+                purchaseToken:
+                  type: string
+                  maxLength: 4096
+                  description: Google purchaseToken, or Apple transactionId.
+              required: [platform, productId, purchaseToken]
+      responses:
+        '200':
+          description: Credited, or already credited.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  granted: { type: boolean }
+                  alreadyRedeemed: { type: boolean }
+                  credits: { type: integer }
+                  balance: { type: integer }
+        '400': { description: Malformed request, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '401': { description: Not authenticated, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '422': { description: The purchase is definitively invalid, or its product is not mapped. Do not retry., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '503': { description: Verification unavailable or purchase still pending. The purchase is safe; retry., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/purchases/restore:
+    post:
+      summary: >
+        Re-present purchases the device still holds (reinstall, new device).
+        Each item goes through the same idempotent redemption, so restoring
+        already-credited purchases grants nothing and still succeeds.
+      security: [{ userBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platform: { type: string, enum: [google, apple] }
+                purchases:
+                  type: array
+                  maxItems: 50
+                  items:
+                    type: object
+                    properties:
+                      productId: { type: string }
+                      purchaseToken: { type: string }
+                    required: [productId, purchaseToken]
+              required: [platform, purchases]
+      responses:
+        '200':
+          description: Per-item outcome.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  creditsGranted: { type: integer }
+                  balance: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        productId: { type: string }
+                        granted: { type: boolean }
+                        alreadyRedeemed: { type: boolean }
+                        reason: { type: string, nullable: true }
+        '400': { description: Malformed batch, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '401': { description: Not authenticated, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
+  /api/purchases/config:
+    get:
+      summary: >
+        Which store integrations can actually verify right now. The app uses
+        this to hide the purchase UI rather than take money it cannot credit.
+      security: [{ userBearerAuth: [] }]
+      responses:
+        '200':
+          description: Platform readiness.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  platforms:
+                    type: object
+                    properties:
+                      google: { type: boolean }
+                      apple: { type: boolean }
+        '401': { description: Not authenticated, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
   /api/auth/delete-account:
     post:
       summary: >
