@@ -4,6 +4,12 @@
 jest.mock("../../services/generation/generationService", () => ({
   generate: jest.fn(),
 }));
+// Sprint 3 / H-3: the refund-failure alarm now goes through alerting rather
+// than console.error.
+jest.mock("../../utils/alerting", () => ({
+  raise: jest.fn(),
+  SEVERITY: { CRITICAL: "critical", ERROR: "error", WARNING: "warning" },
+}));
 jest.mock("../../services/wallet/walletService", () => ({
   deductBalance: jest.fn(),
   addBalance: jest.fn(),
@@ -27,6 +33,7 @@ const styleModel = require("../../models/styleModel");
 const creationsModel = require("../../models/creationsModel");
 const notificationModel = require("../../models/notificationModel");
 const generationEventsModel = require("../../models/generationEventsModel");
+const alerting = require("../../utils/alerting");
 const { generateImage } = require("../generateController");
 
 function makeReqRes({ file = { buffer: Buffer.from("x") }, styleId = "style-1" } = {}) {
@@ -228,20 +235,27 @@ describe("generateController.generateImage", () => {
     );
   });
 
-  it("logs a [FINANCIAL INCONSISTENCY] error and still responds if the refund itself fails", async () => {
+  it("raises a CRITICAL alert and still responds if the refund itself fails", async () => {
     generationService.generate.mockRejectedValue(new Error("provider crash"));
     walletService.addBalance.mockRejectedValue(new Error("refund db error"));
     const { req, res, next } = makeReqRes();
 
     await generateImage(req, res, next);
 
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining("[FINANCIAL INCONSISTENCY]"),
+    // Sprint 3 / H-3: the assertion moved with the behaviour. What matters is
+    // not that a string was printed to an unwatched stdout, but that the event
+    // can actually reach a human - the user has been charged for an image they
+    // never received and only a person can put that right.
+    expect(alerting.raise).toHaveBeenCalledWith(
+      "refund_failed_after_generation",
       expect.objectContaining({
-        userId: "user-1",
-        amount: 2,
-        originalError: "provider crash",
-        refundError: "refund db error",
+        severity: "critical",
+        context: expect.objectContaining({
+          userId: "user-1",
+          amount: 2,
+          originalError: "provider crash",
+          refundError: "refund db error",
+        }),
       })
     );
     // The refund failure itself becomes the propagated error.

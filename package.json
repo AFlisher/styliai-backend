@@ -4,6 +4,7 @@
   "description": "Custom authentication backend for StyliAI",
   "main": "server.js",
   "scripts": {
+    "start": "node server.js",
     "migrate": "node src/utils/runMigration.js",
     "create-admin": "node src/utils/createAdmin.js",
     "backfill-thumbnails": "node src/utils/backfillThumbnails.js",
@@ -19,6 +20,9 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@fal-ai/client": "^1.10.1",
     "@google/genai": "^2.10.0",

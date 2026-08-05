@@ -9,6 +9,7 @@ const {
   logModerationRejection,
 } = require("../utils/contentModeration");
 const { logProviderError } = require("../utils/providerErrorLog");
+const alerting = require("../utils/alerting");
 
 // Flat per-generation cost, since (unlike /api/generate) there is no style
 // entity here to carry a per-item credit_cost. Configurable so pricing can
@@ -297,15 +298,21 @@ async function generateImage(req, res, next) {
           "Refund for failed Stability generation"
         );
       } catch (refundErr) {
-        console.error(
-          "[FINANCIAL INCONSISTENCY] Refund failed after a failed Stability generation - user was charged but never received a refund.",
-          {
+        // Sprint 3 / H-3. See generateController for why this is an alert
+        // rather than a console.error: the user is out of pocket and no
+        // automated path will ever notice.
+        alerting.raise("refund_failed_after_generation", {
+          severity: alerting.SEVERITY.CRITICAL,
+          message:
+            "A user was charged for a Stability generation that failed, and " +
+            "the refund ALSO failed. Their credits must be restored manually.",
+          context: {
             userId,
             amount: GENERATION_COST,
             originalError: genErr && genErr.message,
             refundError: refundErr && refundErr.message,
-          }
-        );
+          },
+        });
         throw refundErr;
       }
       throw genErr;

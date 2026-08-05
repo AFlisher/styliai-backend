@@ -18,6 +18,12 @@ jest.mock("../../services/wallet/walletService", () => ({
   deductBalance: jest.fn(),
   addBalance: jest.fn(),
 }));
+// Sprint 3 / H-3: the refund-failure alarm now goes through alerting rather
+// than console.error.
+jest.mock("../../utils/alerting", () => ({
+  raise: jest.fn(),
+  SEVERITY: { CRITICAL: "critical", ERROR: "error", WARNING: "warning" },
+}));
 jest.mock("../../models/creationsModel", () => ({
   addCreation: jest.fn(),
 }));
@@ -29,6 +35,7 @@ const stabilityService = require("../../services/stabilityService");
 const walletService = require("../../services/wallet/walletService");
 const creationsModel = require("../../models/creationsModel");
 const styleModel = require("../../models/styleModel");
+const alerting = require("../../utils/alerting");
 const { generateImage, adminPreviewGenerate } = require("../stabilityController");
 
 function makeReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRatio, style, styleId } = {}) {
@@ -411,20 +418,26 @@ describe("stabilityController.generateImage", () => {
     );
   });
 
-  it("logs a [FINANCIAL INCONSISTENCY] error and still responds if the refund itself fails", async () => {
+  it("raises a CRITICAL alert and still responds if the refund itself fails", async () => {
     stabilityService.generateImage.mockRejectedValue(new Error("provider crash"));
     walletService.addBalance.mockRejectedValue(new Error("refund db error"));
     const { req, res, next } = makeReqRes();
 
     await generateImage(req, res, next);
 
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining("[FINANCIAL INCONSISTENCY]"),
+    // Sprint 3 / H-3. See generateController's equivalent: the assertion
+    // follows the behaviour from an unwatched stdout to something that can
+    // actually reach a human.
+    expect(alerting.raise).toHaveBeenCalledWith(
+      "refund_failed_after_generation",
       expect.objectContaining({
-        userId: "user-1",
-        amount: 1,
-        originalError: "provider crash",
-        refundError: "refund db error",
+        severity: "critical",
+        context: expect.objectContaining({
+          userId: "user-1",
+          amount: 1,
+          originalError: "provider crash",
+          refundError: "refund db error",
+        }),
       })
     );
     expect(next).toHaveBeenCalledWith(

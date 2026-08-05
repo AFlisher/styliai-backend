@@ -372,9 +372,14 @@ describe("health endpoints", () => {
   it("reports readiness as bare booleans", async () => {
     const res = await request(app).get("/readyz");
 
+    // Sprint 3 / H-9: `migrations` joined the dependency set. A schema behind
+    // the code it is serving is not a degraded instance, it is a broken one,
+    // and it is the only dependency here that a restart cannot fix - so it
+    // gates traffic like the other two.
     expect(res.body.checks).toEqual({
       database: expect.any(Boolean),
       storage: expect.any(Boolean),
+      migrations: expect.any(Boolean),
     });
   });
 

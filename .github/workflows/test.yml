@@ -1,0 +1,95 @@
+# Sprint 3 / H-4 — run the tests.
+#
+# Until this existed, the only workflow in this repository was a secret scan.
+# The backend AUTO-DEPLOYS from `main`, so 2,320 passing tests gated nothing:
+# the sole thing standing between a broken commit and production was a
+# developer remembering to run `npm test`.
+#
+# This does not stop a deploy on its own - Railway watches the branch, not this
+# workflow. What it does is make a failure loud and attributable within a
+# minute of the push, and give the branch-protection rule something to require.
+# Turning that rule on is a one-line repository setting and is the other half
+# of this fix (see SECURITY_OPERATIONS.md §1).
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Read-only: this workflow needs nothing but the code.
+permissions:
+  contents: read
+
+# A newer push makes an in-flight run irrelevant. Cancelling keeps the queue
+# short and the feedback fast, which is what makes CI something people read.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: jest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          # Matches the developed-and-tested runtime recorded in README.md.
+          # There is no `engines` field to read this from - adding one is
+          # tracked separately - so it is stated here explicitly rather than
+          # inherited from whatever the runner image happens to ship.
+          node-version: '24'
+          cache: 'npm'
+
+      # `npm ci` rather than `npm install`: it installs exactly what the
+      # lockfile says and fails if the lockfile and package.json disagree,
+      # which is the difference between testing what will ship and testing
+      # something adjacent to it.
+      - name: Install
+        run: npm ci
+
+      # The suite mocks every external dependency, so it needs no database, no
+      # Supabase project and no provider keys.
+      #
+      # ADMIN_JWT_SECRET is the one variable genuinely read from process.env by
+      # real code the integration tests exercise (adminAuthMiddleware.js signs
+      # and verifies real JWTs through the actual app), so it must be present
+      # with a consistent value for the whole run. It is deliberately plain,
+      # low-entropy text - a JWT HMAC secret has no required byte length or
+      # encoding, so there is no reason for it to look like key material.
+      #
+      # MFA_ENCRYPTION_KEY is deliberately NOT set here. src/utils/mfaCrypto.js
+      # and src/config/validateSecrets.js only ever read it through an `env`
+      # parameter that every test exercising them supplies its own
+      # crypto.randomBytes(32)-derived value for (see
+      # validateSecrets.mfa.test.js, mfaCrypto.test.js, adminMfaService.test.js,
+      # adminController.mfa.test.js) - server.js is what reads it from the real
+      # process environment at boot, and server.js is never required by this
+      # suite (confirmed in src/__tests__/lifecycle.test.js). A workflow-level
+      # value here is therefore never reached by anything, which was verified
+      # by running the full suite with it unset: 129 suites / 2365 tests still
+      # pass, unchanged.
+      #
+      # It was previously hardcoded as a base64 string here - a placeholder,
+      # never a real key, but shaped exactly like one - which is precisely what
+      # tripped Gitleaks' generic secret-shaped-literal detector in CI. Rather
+      # than move an unused placeholder into a GitHub Actions secret (which
+      # would need provisioning and maintaining for something nothing reads),
+      # it is simply removed: the safest fix for a hardcoded value is not
+      # hiding it, it is not committing it.
+      - name: Test
+        env:
+          NODE_ENV: test
+          ADMIN_JWT_SECRET: ci-only-not-a-real-secret-long-enough-for-the-boot-check
+        run: npm test -- --ci --runInBand
+
+      # The migration schedule is the one thing that can be wrong in a way the
+      # unit tests cannot see: a migration added to the directory but not to
+      # the schedule. `assertScheduleIsComplete` exits 1 on that, and it needs
+      # no database - it only diffs the directory against the list.
+      - name: Migration schedule is complete
+        run: node -e "require('./src/utils/runMigration.js').assertScheduleIsComplete()"

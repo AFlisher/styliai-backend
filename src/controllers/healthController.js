@@ -57,7 +57,12 @@ function healthz(req, res) {
  * proves credentials and reachability without touching user content.
  */
 async function readyz(req, res) {
-  const checks = { database: false, storage: false };
+  // Sprint 3 / H-9: `migrations` joins the dependency checks because a schema
+  // behind the code it is serving is not a degraded instance, it is a broken
+  // one - it will 500 on whichever endpoint touches the missing column. Making
+  // it a readiness signal is what holds traffic off a half-migrated deploy,
+  // and it is the one dependency here that a restart cannot fix.
+  const checks = { database: false, storage: false, migrations: false };
 
   try {
     await withTimeout(db.query("SELECT 1"), "database");
@@ -84,6 +89,31 @@ async function readyz(req, res) {
     logger.warn("health_check_failed", {
       requestId: req.id,
       dependency: "storage",
+      message: (err && err.message) || "unknown",
+    });
+  }
+
+  try {
+    const { checkPendingMigrations } = require("../utils/migrationStatus");
+    const status = await withTimeout(checkPendingMigrations(), "migrations");
+
+    // `checked: false` means we could not read the ledger, not that the schema
+    // is behind. Reporting true there is deliberate: a readiness probe that
+    // fails closed on its own inability to introspect would take the service
+    // down over a bookkeeping table.
+    checks.migrations = !status.checked || status.pending.length === 0;
+
+    if (status.checked && status.pending.length > 0) {
+      logger.error("readyz_migrations_pending", {
+        requestId: req.id,
+        pendingCount: status.pending.length,
+      });
+    }
+  } catch (err) {
+    checks.migrations = true;
+    logger.warn("health_check_failed", {
+      requestId: req.id,
+      dependency: "migrations",
       message: (err && err.message) || "unknown",
     });
   }

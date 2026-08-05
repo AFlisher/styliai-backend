@@ -119,6 +119,52 @@ function buildPoolConfig(env = process.env) {
 const pool = new Pool(buildPoolConfig());
 
 /**
+ * Sprint 3 / H-2 — the handler whose absence was a process-kill.
+ *
+ * `pg` emits `error` on the POOL when an IDLE client fails - a connection the
+ * application is not currently using and cannot therefore try/catch around.
+ * `Pool` is an EventEmitter, and Node's rule for EventEmitters is absolute: an
+ * `error` event with no listener is re-thrown as an uncaught exception, which
+ * terminates the process.
+ *
+ * This is not an exotic condition. Supabase's pooler recycles idle connections,
+ * a failover drops them all at once, and any network blip does the same. So the
+ * pre-fix behaviour was that routine infrastructure events could kill the API,
+ * with the stack trace pointing at `pg` internals and nothing explaining why.
+ *
+ * There is deliberately nothing to "handle" here beyond observing it. `pg`
+ * discards the broken client itself and the next `pool.query` transparently
+ * opens a new one, so the correct action is to record it and let the pool get
+ * on with it. What must NOT happen is rethrowing.
+ *
+ * Required lazily so that merely importing this config file - which the whole
+ * test suite does - does not pull in the alerting module and its fetch.
+ */
+pool.on("error", (err) => {
+  try {
+    const { logger } = require("../utils/logger");
+    logger.error("db_pool_idle_client_error", {
+      // Message and pg's error code only. The error object can carry the last
+      // query and its parameters, which is user content (SEC-7.3).
+      message: (err && err.message) || "unknown",
+      code: (err && err.code) || null,
+    });
+
+    require("../utils/alerting").raise("db_pool_idle_client_error", {
+      severity: require("../utils/alerting").SEVERITY.ERROR,
+      message:
+        "A pooled Postgres connection failed while idle. The pool recovers on " +
+        "its own; repeated occurrences mean the database or the network between " +
+        "us and it is unstable.",
+      context: { code: (err && err.code) || null },
+    });
+  } catch (_) {
+    // The listener existing at all is the fix. If reporting throws, the pool
+    // must still not take the process down with it.
+  }
+});
+
+/**
  * SEC-19.3 - runs a callback with a statement_timeout other than the pool
  * default, scoped to one connection and one transaction.
  *

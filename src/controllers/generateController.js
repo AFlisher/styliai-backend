@@ -13,6 +13,7 @@ const { logGenerationBudgetEvent } = require("../utils/generationBudget");
 const { logProviderError } = require("../utils/providerErrorLog");
 const { generationTimeouts } = require("../config/generationTimeouts");
 const { withDeliveryUrls } = require("../utils/creationImageUrl");
+const alerting = require("../utils/alerting");
 
 /**
  * SEC-7.2. An AbortController wired to the response's 'close' event, so a
@@ -166,16 +167,24 @@ async function generateImage(req, res, next) {
           "Refund for failed generation"
         );
       } catch (refundErr) {
-        console.error(
-          "[FINANCIAL INCONSISTENCY] Refund failed after a failed generation - user was charged but never received a refund.",
-          {
+        // Sprint 3 / H-3. This was a console.error going to an unwatched
+        // stdout - the single most important operational event in the system,
+        // recorded where nothing could ever act on it. The user has been
+        // charged for an image they did not receive, and only a human can put
+        // that right, so it is a CRITICAL alert and not merely a log line.
+        alerting.raise("refund_failed_after_generation", {
+          severity: alerting.SEVERITY.CRITICAL,
+          message:
+            "A user was charged for a generation that failed, and the refund " +
+            "ALSO failed. Their credits must be restored manually.",
+          context: {
             userId,
             amount: style.creditCost,
             styleId,
             originalError: genErr && genErr.message,
             refundError: refundErr && refundErr.message,
-          }
-        );
+          },
+        });
         throw refundErr;
       }
       throw genErr;

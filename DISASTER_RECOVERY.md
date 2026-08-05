@@ -17,7 +17,9 @@ guarantees is worse than none. **Bold = not yet verified by anyone.**
 |---|---|---|
 | Schema is rebuildable from the repo | ✅ Yes | `npm run migrate` applies 34 migrations + ledger; `assertScheduleIsComplete()` fails on drift |
 | Schema completeness is checkable | ✅ Yes | `npm run verify:restore` — read-only, exit 0/1 |
-| Independent DB backup exists | ⚠️ Tooling yes, **runs no** | `npm run backup:db` — requires `pg_dump`, **not currently installed on the operator workstation** |
+| Independent DB backup exists | ⚠️ Tooling yes, **runnable now, still not scheduled** | `npm run backup:db`. Sprint 3 added `.github/workflows/backup-verify.yml`, whose runner *does* have `pg_dump` — so the "cannot run it anywhere" problem is solved. The dump job is **manual-only on purpose**: uploading it as a build artifact puts every user's email, password hash and credit history into GitHub's storage, and that is an operator decision, not a default. |
+| Schema drift is detected automatically | ✅ Yes (Sprint 3) | `backup-verify.yml` runs `verify:restore` against production **nightly**, read-only. On a project that applies migrations by hand, this is the most likely way `main` and production quietly diverge. |
+| A deploy can outrun its schema | ✅ Detected (Sprint 3) | `/readyz` reports `migrations: false` and returns 503 when the ledger is missing a scheduled migration; boot raises a CRITICAL alert. |
 | Independent storage backup exists | ✅ Tooling proven | `npm run backup:storage` — exercised against production: 91 objects / 82.64 MB, integrity verified, single-byte corruption detected |
 | Supabase automated DB backups | **UNKNOWN** | Owner must confirm in the dashboard |
 | Supabase backup retention window | **UNKNOWN** | Owner must confirm |
@@ -226,7 +228,16 @@ Stated explicitly so nobody assumes coverage that is absent:
 
 - **Cannot enable** Supabase automated backups, retention, or PITR — dashboard only.
 - **Cannot enable** bucket versioning — dashboard/API, plan-dependent.
-- **Cannot schedule** anything. There is no scheduler (SEC-20.x); the backup
-  commands must be driven by an external cron, CI schedule, or a human.
+- ~~**Cannot schedule** anything.~~ **Partly resolved (Sprint 3).** GitHub
+  Actions `schedule:` is a scheduler, and its runner has `pg_dump`.
+  `backup-verify.yml` now runs `verify:restore` nightly against production.
+  What is still *not* scheduled is the dump itself — deliberately, because the
+  only destination a workflow can reach without further setup is GitHub's
+  artifact storage, and a nightly copy of every user's personal data into a
+  third party is a decision the owner has to make rather than inherit. The
+  right destination is object storage the owner controls; until that exists,
+  the dump job is manual.
+- **Still no in-process scheduler.** The abuse sweep and ledger eviction remain
+  traffic-driven (SEC-20.x), so they stop when traffic does.
 - **Cannot perform** the restore drill. §5 is a human procedure.
 - **Does not automate restore.** Deliberate — see §3.

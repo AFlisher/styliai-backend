@@ -18,7 +18,10 @@ Run through this before promoting a build.
 
 **Verification after deploy**
 - [ ] `GET /healthz` → `200 {"status":"ok"}`
-- [ ] `GET /readyz` → `200 {"status":"ready","checks":{"database":true,"storage":true}}`
+- [ ] `GET /readyz` → `200 {"status":"ready","checks":{"database":true,"storage":true,"migrations":true}}` — a `migrations: false` here means this build is serving code ahead of the schema. Run `npm run migrate`.
+- [ ] **Railway health check is pointed at `/readyz`** (Settings → Health Check Path). Without it the platform has no way to hold traffic off a degraded instance, and the endpoint is decoration.
+- [ ] `ALERT_WEBHOOK_URL` is set and a test alert arrived. An unset webhook is not an error, but it means nothing will tell you when a user is charged for an image they never received.
+- [ ] **Branch protection requires the `Tests` workflow on `main`.** The workflow runs the suite; the repository setting is what makes it a gate. Without it, a red build still auto-deploys.
 - [ ] `GET /api/creations` → `401` (auth wired)
 - [ ] Any 4xx response carries an `X-Request-Id` header.
 - [ ] `GET /legal/privacy-policy.html` → `200` **from a signed-out browser** (Sprint 1 / B-2). This is the URL submitted to both stores; a 404 here is a rejected submission, and it is not exercised by any user-facing flow, so nothing else will notice it broke.
@@ -92,6 +95,31 @@ unmatched product id is refused (`unknown_product`, HTTP 422) rather than
 defaulted to a guess. `GET /api/purchases/config` reports which platforms are
 live; the app uses it to hide the purchase UI rather than take money it cannot
 credit.
+
+### Operational resilience (Sprint 3)
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `ALERT_WEBHOOK_URL` | Where critical alerts are delivered. Any Slack/Discord incoming-webhook URL, or anything accepting a JSON POST. **Unset ⇒ alerts are logged and counted but never delivered**, which is the pre-Sprint-3 state. | unset |
+| `ALERT_WEBHOOK_TIMEOUT_MS` | Outbound timeout for one alert | `3000` |
+| `ALERT_DEDUPE_WINDOW_MS` | Per-event suppression window. A failing dependency raises one alert per request; without this the channel receives thousands and gets muted, which is the same as no alerting. | `300000` (5 min) |
+| `SHUTDOWN_GRACE_PERIOD_MS` | How long in-flight requests get to finish after SIGTERM. **Must exceed your slowest generation** — a generation killed mid-flight has already been charged and will never reach its refund. | `30000` |
+| `SERVER_KEEPALIVE_TIMEOUT_MS` | Node socket keep-alive. Must be **longer** than the upstream proxy's or you get sporadic 502s that only reproduce under load. | `65000` |
+| `SERVER_HEADERS_TIMEOUT_MS` | Must be **greater than** `SERVER_KEEPALIVE_TIMEOUT_MS`. | `70000` |
+| `MIGRATION_CHECK_CACHE_MS` | How long the pending-migration answer is cached for `/readyz` | `60000` |
+
+**What now alerts.** `refund_failed_after_generation` (CRITICAL — a user was
+charged for an image they never received and only a human can fix it),
+`uncaught_exception`, `unhandled_rejection`, `migrations_pending`,
+`db_pool_idle_client_error`, `shutdown_grace_exceeded`.
+
+**`/readyz` gained a third check.** `migrations` is `false` when the live
+`schema_migrations` ledger is missing a migration this build's schedule
+expects — so a deploy that shipped code ahead of its schema reports **503** and
+is held out of rotation rather than 500-ing on whichever endpoint touches the
+missing column. It reports `true` when the ledger cannot be read at all:
+"cannot tell" is not "behind", and a readiness probe that fails closed on its
+own inability to introspect is one that gets muted.
 
 ### Optional / tuning
 

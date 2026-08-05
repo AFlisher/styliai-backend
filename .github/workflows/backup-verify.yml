@@ -1,0 +1,146 @@
+# Sprint 3 / B-4 — the half of disaster recovery a repository can actually own.
+#
+# DISASTER_RECOVERY.md §0 records the state honestly: the backup tooling exists
+# and works, but `pg_dump` is "not currently installed on the operator
+# workstation", no restore has ever been performed, and there is no scheduler -
+# so `npm run backup:db` had never produced a single file.
+#
+# A GitHub runner already has `pg_dump`, and `schedule:` already is a scheduler.
+# That closes the "cannot run it" half here. The other half - enabling Supabase
+# PITR, confirming the retention window, and performing the §5 restore drill -
+# is dashboard work that no workflow can do, and is still open.
+#
+# ─── Two jobs, deliberately different in what they touch ─────────────────────
+#
+#   verify   read-only, runs on a schedule. Never writes, never moves data.
+#   dump     produces a real dump. MANUAL ONLY - see the warning on that job.
+name: Backup and verify
+
+on:
+  schedule:
+    # Daily, early UTC. The verify job is cheap and read-only, so the useful
+    # cadence is "often enough that drift is caught the next morning".
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      take_dump:
+        description: >
+          Also produce a pg_dump and upload it as a build artifact.
+          READ THE WARNING IN THE `dump` JOB FIRST - this places real user data
+          in GitHub's artifact storage.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Read-only. Safe to run on any schedule, moves no data. ─────────────────
+  verify:
+    name: verify schema against the repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Skips cleanly on a fork or before the secret is set, rather than failing
+    # every night with a red cross nobody can fix.
+    if: ${{ github.event_name != 'pull_request' }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Skip if unconfigured
+        id: guard
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "DATABASE_URL secret is not set - nothing to verify."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Checks tables, the migration ledger, migration checksums, the
+      # constraints whose absence is SILENT, and the indexes that bound cost.
+      # Exit 1 means the live schema is not what this repository describes -
+      # which, on a project that applies migrations by hand, is the single most
+      # likely way production and `main` quietly diverge.
+      - name: verify:restore
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_CA_CERT: ${{ secrets.DATABASE_CA_CERT }}
+        run: npm run verify:restore
+
+  # ── Produces real user data. Manual trigger only. ──────────────────────────
+  #
+  # ⚠️  A dump of this database contains every user's email, password hash,
+  #     Google identity, country and full credit history. Uploading it as a
+  #     GitHub artifact copies all of that into a third party's storage, where
+  #     it is downloadable by anyone with repository access for as long as the
+  #     retention window lasts.
+  #
+  #     That is a deliberate, operator-made decision, which is why this job
+  #     never runs on a schedule and never runs without someone ticking a box.
+  #     The right long-term destination is object storage the owner controls
+  #     (an S3/R2 bucket with its own retention and access policy), and this
+  #     job is the interim measure that makes "we have never taken a backup"
+  #     stop being true.
+  dump:
+    name: pg_dump (manual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.take_dump }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      # The runner image ships PostgreSQL client tools. Pinning the major
+      # version matters: pg_dump refuses to dump a server newer than itself.
+      - name: Install PostgreSQL client
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+          pg_dump --version
+
+      - name: Take the dump
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_CA_CERT: ${{ secrets.DATABASE_CA_CERT }}
+        run: npm run backup:db
+
+      # The manifest exists so a truncated dump is distinguishable from a good
+      # one BEFORE a restore depends on it. Re-hashing here means the artifact
+      # that gets uploaded has been checked, not merely produced.
+      - name: Verify the dump against its manifest
+        run: |
+          manifest=$(ls -1 backups/styliai-db-*.manifest.json | tail -n 1)
+          echo "Verifying $manifest"
+          node src/utils/backupDatabase.js "$manifest"
+
+      - name: Upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: styliai-db-backup
+          path: backups/
+          # Short on purpose. This is a stopgap, not a retention policy, and a
+          # long window multiplies the exposure described above.
+          retention-days: 7
+          if-no-files-found: error
