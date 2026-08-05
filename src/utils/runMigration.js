@@ -155,7 +155,21 @@ function assertScheduleIsComplete() {
 
 /** SHA-256 of a migration file, as applied. See migration_schema_migrations.sql. */
 function checksumOf(sql) {
-  return crypto.createHash('sha256').update(sql, 'utf8').digest('hex');
+  // LINE ENDINGS ARE NORMALISED BEFORE HASHING, and this is not cosmetic.
+  //
+  // This repository is developed on Windows with `core.autocrlf=true`, so git
+  // materialises the SAME committed file with CRLF in one working tree and LF
+  // in another (a git worktree, CI on Linux, a fresh clone with different
+  // settings). Hashing the raw bytes therefore reported 21 migrations as
+  // "edited after application" purely because the ledger was written from one
+  // checkout and verified from another - which is exactly the failure the drift
+  // check exists to prevent people ignoring: a check that is always red is a
+  // check nobody reads.
+  //
+  // The property worth protecting is that the SQL is unchanged, not that the
+  // bytes are identical, so the newline representation is normalised out.
+  const normalized = String(sql).replace(/\r\n/g, '\n');
+  return crypto.createHash('sha256').update(normalized, 'utf8').digest('hex');
 }
 
 /**

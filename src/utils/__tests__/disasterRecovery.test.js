@@ -60,6 +60,38 @@ describe("SEC-21.1 — the schedule is importable without side effects", () => {
     expect(a).not.toBe(runner.checksumOf("CREATE TABLE y();"));
     expect(a).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  // THE BUG THIS PINS. `core.autocrlf=true` on Windows means git materialises
+  // the same committed file with CRLF in one working tree and LF in another (a
+  // git worktree, CI on Linux, a fresh clone with different settings). Hashing
+  // raw bytes reported 21 migrations as "edited after application" purely
+  // because the ledger was written from one checkout and verified from another
+  // — turning the drift check permanently red, which is how a real drift would
+  // then go unnoticed.
+  it("is invariant to CRLF vs LF line endings", () => {
+    const lf = "CREATE TABLE x (\n  id int\n);\n";
+    const crlf = lf.replace(/\n/g, "\r\n");
+    expect(runner.checksumOf(crlf)).toBe(runner.checksumOf(lf));
+  });
+
+  // VACUITY: normalisation must not make the checksum blind to real edits.
+  it("VACUITY: still detects an actual content change", () => {
+    expect(runner.checksumOf("CREATE TABLE x (\n  id int\n);\n"))
+      .not.toBe(runner.checksumOf("CREATE TABLE x (\n  id bigint\n);\n"));
+    // ...and to whitespace that is not a line ending.
+    expect(runner.checksumOf("SELECT 1;\n")).not.toBe(runner.checksumOf("SELECT  1;\n"));
+  });
+
+  // The runner writes the ledger; the verifier reads it and compares. If the
+  // two implementations ever diverge, every migration reads as drifted.
+  it("agrees with the restore verifier's implementation, byte for byte", () => {
+    for (const file of runner.allMigrationFiles().slice(0, 5)) {
+      const viaRunner = runner.checksumOf(
+        fs.readFileSync(path.join(expectations.REPO_ROOT, file), "utf8")
+      );
+      expect(expectations.fileChecksum(file)).toBe(viaRunner);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

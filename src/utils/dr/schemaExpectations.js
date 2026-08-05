@@ -31,10 +31,20 @@ function scheduledMigrations() {
   return runner.allMigrationFiles();
 }
 
-/** SHA-256 of a migration file as it exists in the repository right now. */
+/**
+ * SHA-256 of a migration file as it exists in the repository right now.
+ *
+ * MUST match runMigration.checksumOf exactly, including its line-ending
+ * normalisation — the two are compared against each other, so any divergence
+ * makes the drift check report every migration as edited. It is computed here
+ * rather than imported so this module stays usable without pulling in the
+ * runner, and a test pins the two implementations together for exactly that
+ * reason.
+ */
 function fileChecksum(filename) {
   const sql = fs.readFileSync(path.join(REPO_ROOT, filename), "utf8");
-  return crypto.createHash("sha256").update(sql, "utf8").digest("hex");
+  const normalized = String(sql).replace(/\r\n/g, "\n");
+  return crypto.createHash("sha256").update(normalized, "utf8").digest("hex");
 }
 
 /**
