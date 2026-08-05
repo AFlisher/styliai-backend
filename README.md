@@ -73,13 +73,13 @@ Two boot-time behaviours worth knowing:
 
 ## Database migrations
 
-Migrations are plain `.sql` files in the repository root (**32 of them**). There is no migration framework, no ledger table, and no down-migrations.
+Migrations are plain `.sql` files in the repository root (**38 of them**). There is no migration framework and there are no down-migrations. There *is* a ledger — `schema_migrations` (SEC-21.1) records what each database received, with checksums — but it is bookkeeping written by the runner, not a framework that decides what to run.
 
 ```bash
 npm run migrate
 ```
 
-`runMigration.js` holds an explicit, **dependency-ordered** schedule: 34 files to apply and 2 marked superseded with the reason. Before connecting to anything it diffs that schedule against the directory and **exits 1** if they disagree — an unlisted file, a scheduled file that is missing, a duplicate, or a file in both lists. Adding a migration without scheduling it is therefore a hard failure, not a silent omission.
+`runMigration.js` holds an explicit, **dependency-ordered** schedule: 35 files to apply and 2 marked superseded with the reason. Before connecting to anything it diffs that schedule against the directory and **exits 1** if they disagree — an unlisted file, a scheduled file that is missing, a duplicate, or a file in both lists. Adding a migration without scheduling it is therefore a hard failure, not a silent omission.
 
 > ### ⚠ Do not sort the schedule alphabetically
 >
@@ -91,7 +91,7 @@ Three things the runner deliberately does not do:
 - **It does not track what has run.** There is no ledger table — idempotency comes from the guards, not from bookkeeping.
 - **It does not provision Supabase Storage.** No migration creates the `creations`, `avatars` or `style-images` buckets. **A rebuilt database is not by itself a rebuilt system** — this remains part of **SEC-21.1**.
 
-> **History:** until 2026-08-04 the runner applied a hand-maintained list of **18 of the 32** files, and nothing failed when the other 14 were added without being listed. A fresh database was missing the columns `POST /api/auth/register` inserts into (`verification_token_hash`, `country_code`, `country_name`), the entire admin security layer (roles, MFA, audit log, lockout), and every `ENABLE ROW LEVEL SECURITY` statement in the repository. The runner also swallowed errors — it logged a failure and exited **0**. Both are fixed; the completeness check is what prevents a recurrence.
+> **History:** until 2026-08-04 the runner applied a hand-maintained list of **18 of the 32 files then present**, and nothing failed when the other 14 were added without being listed. A fresh database was missing the columns `POST /api/auth/register` inserts into (`verification_token_hash`, `country_code`, `country_name`), the entire admin security layer (roles, MFA, audit log, lockout), and every `ENABLE ROW LEVEL SECURITY` statement in the repository. The runner also swallowed errors — it logged a failure and exited **0**. Both are fixed; the completeness check is what prevents a recurrence.
 
 **Convention used throughout this project:** a migration is written *and immediately applied* to the live database in the same change. There is no "pending migrations" state.
 
@@ -157,7 +157,7 @@ npx jest test/critical         # release-blocker tier
 npx jest -t "avatar"           # by name
 ```
 
-**123 suites · 2,234 tests**, all passing (re-run 2026-08-05, Sprint 1). The total moves when files are added or removed, not only when tests are: `test/medium/secrets.medium.test.js` runs one case per **git-tracked** file, so an untracked new file is invisible to it and a committed one is not. Count after committing. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
+**126 suites · 2,320 tests**, all passing (re-run 2026-08-05, Sprint 2). The total moves when files are added or removed, not only when tests are: `test/medium/secrets.medium.test.js` runs one case per **git-tracked** file, so an untracked new file is invisible to it and a committed one is not. Count after committing. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
 
 Two conventions worth adopting before adding tests:
 
