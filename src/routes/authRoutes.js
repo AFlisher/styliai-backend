@@ -3,6 +3,7 @@ const verifyIntegrity = require('../middleware/verifyIntegrity');
 const interpretIntegrity = require('../middleware/interpretIntegrity');
 const enforceIntegrity = require('../middleware/enforceIntegrity');
 const authController = require('../controllers/authController');
+const accountDeletionController = require('../controllers/accountDeletionController');
 const authMiddleware = require('../middleware/authMiddleware');
 // SEC-18.4: disposable-domain rejection plus an inert-until-configured CAPTCHA.
 const { signupControls } = require('../services/abuse/signupControls');
@@ -43,6 +44,15 @@ router.post('/logout-all', accountActionLimiter, authMiddleware, authController.
 // email round-trip, which is why it is not exempt from the domain check.
 router.post('/google', googleSignInLimiter, signupControls({ requireCaptcha: false }), authController.googleSignIn);
 router.post('/change-password', accountActionLimiter, authMiddleware, authController.changePassword);
+// Sprint 1 / B-1: irreversible self-service account deletion.
+//
+// Mounted alongside the other account-lifecycle actions and on the same
+// accountActionLimiter, deliberately: this is neither cheaper nor more
+// dangerous per-request than change-password, and giving an irreversible
+// action its own looser budget would be the wrong asymmetry. Auth precedes the
+// controller so the erased account is always the caller's own - there is no id
+// anywhere in the request.
+router.post('/delete-account', accountActionLimiter, authMiddleware, accountDeletionController.deleteAccount);
 router.post('/forgot-password', forgotPasswordLimiter, authController.forgotPassword);
 router.get('/status', statusPollLimiter, authController.checkVerificationStatus);
 // Named by the audit alongside registration: resend is the other way to make

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Account Deletion — StyliAI</title>
+<link rel="stylesheet" href="/legal/_shared.css" />
+</head>
+<body>
+
+<nav class="docnav">
+  <a href="/legal/">All documents</a>
+  <a href="/legal/privacy-policy.html">Privacy Policy</a>
+  <a href="/legal/terms-of-service.html">Terms of Service</a>
+</nav>
+
+<h1>Deleting your StyliAI account</h1>
+
+<div class="meta">
+  <div><strong>Document version:</strong> 1.0.0</div>
+  <div><strong>Drafted:</strong> 2026-08-05</div>
+  <div><strong>Effective date:</strong> <span class="ph">[[PLACEHOLDER: date of first public store release]]</span></div>
+  <div><strong>Applies to:</strong> StyliAI for Android and iOS</div>
+  <div><strong>Contact:</strong> <span class="ph">[[PLACEHOLDER: support email]]</span></div>
+</div>
+
+<p class="notice">
+  This page exists to satisfy Google Play's requirement that an app offering account creation
+  publishes a <strong>publicly reachable URL</strong> explaining how to request account and
+  data deletion, in addition to the in-app path. It is deliberately written so that it can be
+  read and acted on by someone who does not have the app installed.
+</p>
+
+<h2>How to delete your account</h2>
+
+<h3>From inside the app (immediate)</h3>
+<ol>
+  <li>Open StyliAI and sign in.</li>
+  <li>Go to the <strong>Profile</strong> tab.</li>
+  <li>Scroll to <strong>Delete Account</strong>.</li>
+  <li>Read the confirmation screen, type <strong>DELETE</strong> to confirm, and — if you sign in with a password — enter your current password.</li>
+  <li>Confirm. Your account is erased immediately and you are signed out of every device.</li>
+</ol>
+<p>
+  There is no waiting period, no grace period and no recovery window.
+  <strong>Deletion cannot be undone.</strong>
+</p>
+
+<h3>If you cannot access the app</h3>
+<p>
+  If you have lost access to your account or removed the app, email
+  <span class="ph">[[PLACEHOLDER: support email]]</span> from the address registered to the
+  account and ask for deletion. We will verify that you control the address before acting.
+</p>
+<p class="notice">
+  <span class="ph">[[PLACEHOLDER: state the response-time commitment for emailed requests
+  (e.g. within 30 days) and confirm the inbox is monitored — Google Play expects a stated
+  turnaround]]</span>
+</p>
+
+<h2>What is deleted</h2>
+<p>All of the following are erased when you delete your account:</p>
+<table>
+  <tr><th>Category</th><th>Includes</th></tr>
+  <tr><td>Account and identity</td><td>Email address, display name, password hash, Google sign-in link, country</td></tr>
+  <tr><td>Profile</td><td>Biography, profile picture (both the record and the stored image file)</td></tr>
+  <tr><td>Your images</td><td>Every generated image and thumbnail in your gallery, and the stored image files themselves</td></tr>
+  <tr><td>Credits</td><td>Balance, transaction history, daily reward history, ad reward records</td></tr>
+  <tr><td>Activity</td><td>Favourites, notifications, generation history, feedback and ratings</td></tr>
+  <tr><td>Sessions</td><td>All refresh tokens and device records; every signed-in device is signed out at once</td></tr>
+  <tr><td>Abuse records</td><td>Risk score and any findings associated with the account</td></tr>
+</table>
+
+<h2>What is kept, and why</h2>
+<p>
+  Two things survive deletion. Both are deliberate, and neither contains information that
+  identifies you.
+</p>
+<table>
+  <tr><th>Kept</th><th>What it contains</th><th>Why</th></tr>
+  <tr>
+    <td>A deletion record</td>
+    <td>The account's internal identifier (a random UUID), the date and time, and counts of what was removed. <strong>No email, name, IP address, photo or content.</strong></td>
+    <td>So we can demonstrate that the deletion was actually carried out if you, a regulator, or an app store asks. Once the account is gone, nothing else remembers it existed.</td>
+  </tr>
+  <tr>
+    <td>Anti-fraud ledger entries</td>
+    <td>A short-lived record that a device-integrity token was used. The link to your account is removed at deletion; the remaining entry expires on its own, by default within 24 hours.</td>
+    <td>Deleting these immediately would let a token that was already spent be replayed against the credit system.</td>
+  </tr>
+</table>
+<p>
+  Administrative records of actions taken by our staff (for example, a suspension) are retained
+  as an accountability trail. These record what was done and by whom, not your personal data.
+</p>
+
+<h2>Limits we cannot control</h2>
+<p class="notice">
+  <strong>Please read this before deleting.</strong> When you generate an image, your photo is
+  sent to a third-party AI provider that performs the transformation. Depending on the provider
+  in use, your photo may have been copied to that provider's own content delivery network,
+  with a retention period we do not control and no deletion mechanism available to us.
+</p>
+<p>
+  Deleting your account removes every copy <em>we</em> hold. It cannot retract copies already
+  transferred to that provider, which expire according to the provider's own retention policy.
+  We strip embedded metadata — including any GPS coordinates — from every photo before it
+  leaves our systems, so what is transferred does not carry your camera or location details.
+</p>
+<p class="notice">
+  <span class="ph">[[PLACEHOLDER: name the production provider and link its retention policy
+  here before publishing, so this limitation is verifiable rather than abstract]]</span>
+</p>
+
+<h2>Backups</h2>
+<p class="notice">
+  <span class="ph">[[PLACEHOLDER: state the backup retention window once it is confirmed, and
+  the maximum period after which deleted data is also gone from backups. Do not publish this
+  page claiming immediate erasure from backups until that window is known.]]</span>
+</p>
+
+<h2>Other options</h2>
+<ul>
+  <li>You can delete individual images from your gallery without deleting your account.</li>
+  <li>You can sign out of all devices without deleting your account.</li>
+  <li>If you only want your data exported or corrected rather than erased, contact
+      <span class="ph">[[PLACEHOLDER: privacy contact email]]</span>.</li>
+</ul>
+
+<footer>
+  StyliAI Account Deletion Policy · version 1.0.0 · drafted 2026-08-05 ·
+  <a href="/legal/">document index</a>
+</footer>
+
+</body>
+</html>

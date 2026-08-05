@@ -109,6 +109,14 @@ answer to a genuinely irreversible change is a restore (`DISASTER_RECOVERY.md`
 - [ ] Migrations for this release listed in the tag message
 - [ ] A recent backup exists (`npm run backup:db`, `npm run backup:storage`)
 
+**Store-submission gates** (Sprint 1 / B-1, B-2 — only for a build going to a store)
+
+- [ ] `grep -rn "\[\[PLACEHOLDER" public/legal/` returns **nothing**. The hosted legal documents ship as drafts; publishing one that still names a placeholder is worse than publishing none.
+- [ ] Every document in `public/legal/` carries a real **effective date**, not the drafting date.
+- [ ] `/legal/privacy-policy.html` and `/legal/account-deletion.html` return 200 from a signed-out browser against the **production** origin.
+- [ ] The URLs entered in the Play Console and App Store Connect match those live URLs exactly.
+- [ ] Account deletion has been exercised end-to-end against a throwaway account on the build being shipped.
+
 ---
 
 ## 6. Retention

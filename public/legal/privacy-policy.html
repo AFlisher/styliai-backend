@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Privacy Policy — StyliAI</title>
+<link rel="stylesheet" href="/legal/_shared.css" />
+</head>
+<body>
+
+<nav class="docnav">
+  <a href="/legal/">All documents</a>
+  <a href="/legal/terms-of-service.html">Terms of Service</a>
+  <a href="/legal/account-deletion.html">Account Deletion</a>
+</nav>
+
+<h1>StyliAI Privacy Policy</h1>
+
+<div class="meta">
+  <div><strong>Document version:</strong> 1.0.0</div>
+  <div><strong>Drafted:</strong> 2026-08-05</div>
+  <div><strong>Effective date:</strong> <span class="ph">[[PLACEHOLDER: date of first public store release]]</span></div>
+  <div><strong>Data controller:</strong> <span class="ph">[[PLACEHOLDER: legal entity name]]</span>, <span class="ph">[[PLACEHOLDER: registered address]]</span></div>
+  <div><strong>Contact:</strong> <span class="ph">[[PLACEHOLDER: privacy contact email]]</span></div>
+</div>
+
+<p class="notice">
+  <strong>Drafting note, to be removed before publication.</strong> Every value shown in a
+  highlighted box is a company-specific or jurisdictional fact that cannot be determined from
+  the software and must be supplied by the operator. The
+  <em>data handling</em> described below was written from the actual behaviour of this
+  codebase rather than from a template, and should be re-checked whenever the data flows
+  change. This document has not been reviewed by a lawyer.
+</p>
+
+<h2>1. Who this policy covers</h2>
+<p>
+  This policy explains what StyliAI (“the app”) collects, why, who it is shared with, and
+  what you can do about it. It applies to the StyliAI mobile app and the backend service
+  that supports it.
+</p>
+
+<h2>2. What we collect</h2>
+
+<h3>2.1 Information you give us</h3>
+<table>
+  <tr><th>Data</th><th>Why</th></tr>
+  <tr><td>Email address</td><td>To identify your account, verify it, and send password resets.</td></tr>
+  <tr><td>Password</td><td>Stored only as a bcrypt hash. We never store or can recover the password itself.</td></tr>
+  <tr><td>Display name</td><td>Shown in your profile.</td></tr>
+  <tr><td>Profile biography</td><td>Optional free text you choose to add.</td></tr>
+  <tr><td>Profile picture</td><td>Optional. Stored in a private bucket and served only to you over short-lived signed links.</td></tr>
+  <tr><td>Photos you upload for generation</td><td>Used to produce the styled image you asked for. See §4.</td></tr>
+  <tr><td>Feedback and star ratings</td><td>Optional. Used to improve style quality.</td></tr>
+</table>
+
+<h3>2.2 Information created by using the app</h3>
+<table>
+  <tr><th>Data</th><th>Why</th></tr>
+  <tr><td>Generated images</td><td>Saved to your gallery so you can view and download them.</td></tr>
+  <tr><td>Credit balance and transaction history</td><td>To operate the credit system (earning, spending, refunds).</td></tr>
+  <tr><td>Favourites</td><td>To show the styles you saved.</td></tr>
+  <tr><td>Notifications</td><td>To deliver in-app messages.</td></tr>
+  <tr><td>Generation history and timings</td><td>To operate the service and understand which styles are used.</td></tr>
+  <tr><td>Sign-in times and session records</td><td>To keep you signed in and let you end sessions.</td></tr>
+</table>
+
+<h3>2.3 Information collected automatically</h3>
+<table>
+  <tr><th>Data</th><th>Why</th></tr>
+  <tr><td>Country</td><td>Derived from your IP address using a <em>local</em> lookup database. Your IP address is not sent to a geolocation provider for this.</td></tr>
+  <tr><td>A coarse device label</td><td>A truncated description of your device/browser, so you can recognise your own sessions. Full user-agent strings are not retained.</td></tr>
+  <tr><td>Hashed network origin</td><td>Your IP address is salted and hashed for abuse detection. The raw address is not stored alongside it.</td></tr>
+  <tr><td>Device integrity signals</td><td>On Android, a Google Play Integrity assessment of whether the app and device are genuine, used to prevent fraud against the credit system. Retained briefly (by default under 24 hours).</td></tr>
+  <tr><td>Advertising transaction identifiers</td><td>To make sure a rewarded ad credits your account exactly once.</td></tr>
+</table>
+
+<h2>3. What we do not collect</h2>
+<ul>
+  <li>We do not collect precise location. Country is inferred locally from IP and nothing finer is stored.</li>
+  <li>We do not collect your contacts, calendar, microphone, or SMS.</li>
+  <li>We do not perform biometric identification. Photos are processed to apply a visual style, not to identify a person.</li>
+  <li>We do not sell personal data.</li>
+</ul>
+
+<h2>4. Your photos, and where they go</h2>
+<p>
+  This is the most important section of this policy, so it is stated plainly.
+</p>
+<ul>
+  <li>
+    When you generate an image, the photo you selected is uploaded to our backend and then
+    forwarded to a third-party AI image-generation provider that performs the actual
+    transformation. We do not run these models ourselves.
+  </li>
+  <li>
+    <strong>Before your photo leaves our infrastructure, embedded metadata (EXIF/XMP/IPTC) is
+    stripped server-side.</strong> This removes camera information and any GPS coordinates
+    your photo may have carried.
+  </li>
+  <li>
+    <strong>Depending on the provider in use, your source photo may be uploaded to that
+    provider's own content delivery network under a URL we do not control, with a retention
+    period we do not control, and with no deletion call available to us.</strong> This is
+    currently the case for the provider in production. Where that applies, deleting your
+    account removes the copies we hold but cannot retract copies already transferred to that
+    provider. See the <a href="/legal/account-deletion.html">Account Deletion Policy</a>.
+  </li>
+  <li>
+    Prompts and images may be processed by the provider's own safety classifiers. A
+    generation may be refused on those grounds.
+  </li>
+</ul>
+<p class="notice">
+  <span class="ph">[[PLACEHOLDER: confirm the production image-generation provider by name, and
+  link its data-processing terms and retention period, before publishing]]</span>
+</p>
+
+<h2>5. Who we share data with</h2>
+<p>We use the following processors. Each receives only what it needs to perform its function.</p>
+<table>
+  <tr><th>Processor</th><th>Purpose</th><th>Data involved</th></tr>
+  <tr><td>Supabase</td><td>Database and file storage</td><td>Account data, images, all app records</td></tr>
+  <tr><td>Railway</td><td>Backend application hosting</td><td>All traffic in transit; server logs</td></tr>
+  <tr><td>Google Sign-In</td><td>Optional sign-in method</td><td>Your Google account email, name, profile picture</td></tr>
+  <tr><td>Google AdMob</td><td>Rewarded advertising</td><td>Advertising identifiers, ad interaction data</td></tr>
+  <tr><td>Google Play Integrity</td><td>Anti-fraud device assessment (Android)</td><td>Device and app integrity verdicts</td></tr>
+  <tr><td>Resend</td><td>Transactional email (verification, password reset)</td><td>Your email address</td></tr>
+  <tr><td>AI image-generation provider</td><td>Producing your styled image</td><td>Your uploaded photo and the style prompt — see §4</td></tr>
+</table>
+<p class="notice">
+  <span class="ph">[[PLACEHOLDER: confirm which of the above are engaged as processors under a
+  data processing agreement, and record where each stores data, before publishing]]</span>
+</p>
+
+<h2>6. Advertising</h2>
+<p>
+  StyliAI shows rewarded video ads through Google AdMob as a way to earn credits. AdMob may
+  use advertising identifiers to select and measure ads. You can control this through your
+  device's advertising settings, and on iOS through the app tracking permission prompt.
+</p>
+<p class="notice">
+  <span class="ph">[[PLACEHOLDER: state whether personalised ads are enabled, and reflect the
+  same answer in the Play Data Safety form and the Apple App Privacy label]]</span>
+</p>
+
+<h2>7. How long we keep data</h2>
+<table>
+  <tr><th>Data</th><th>Retention</th></tr>
+  <tr><td>Account data, images, credits, favourites</td><td>Until you delete your account.</td></tr>
+  <tr><td>Device integrity assessments</td><td>Short-lived; by default under 24 hours.</td></tr>
+  <tr><td>Session records</td><td>Until the session expires or you sign out.</td></tr>
+  <tr><td>Abuse-detection findings</td><td>Retained while relevant to protecting the service; contain counts and hashes, not content.</td></tr>
+  <tr><td>Record that an account was deleted</td><td>Retained indefinitely, containing no personal data — see §9.</td></tr>
+</table>
+
+<h2>8. Your rights</h2>
+<p>
+  Depending on where you live, you may have rights to access, correct, export, restrict, or
+  erase your personal data, and to object to certain processing. You can exercise erasure
+  directly and immediately in the app — see §9. For anything else, contact
+  <span class="ph">[[PLACEHOLDER: privacy contact email]]</span>.
+</p>
+<p class="notice">
+  <span class="ph">[[PLACEHOLDER: identify the applicable privacy regimes (e.g. UK/EU GDPR,
+  CCPA), the supervisory authority for complaints, and an EU/UK representative if
+  required]]</span>
+</p>
+
+<h2>9. Deleting your account</h2>
+<p>
+  You can delete your account from inside the app at any time:
+  <strong>Profile → Delete Account</strong>. Deletion is immediate and irreversible: your
+  profile, photos you uploaded, generated images, credit balance and history, favourites,
+  notifications and sessions are erased, and every signed-in device is signed out at once.
+</p>
+<p>
+  We retain one record that a deletion took place. It contains no email, name, IP address or
+  content — only the deleted account's internal identifier, a timestamp and counts — and
+  exists so we can demonstrate that the erasure was carried out. Full detail, including the
+  limits described in §4, is in the
+  <a href="/legal/account-deletion.html">Account Deletion Policy</a>.
+</p>
+
+<h2>10. Security</h2>
+<p>
+  Traffic between the app and our backend is encrypted in transit and the app pins the
+  certificates it will accept. Passwords are stored only as bcrypt hashes. Your generated
+  images and profile picture are held in private storage and served over short-lived signed
+  links rather than public URLs. No system is perfectly secure, and we do not claim otherwise.
+</p>
+
+<h2>11. Children</h2>
+<p>
+  StyliAI is not directed at children. <span class="ph">[[PLACEHOLDER: state the minimum age
+  for your target markets and keep it consistent with the store listings' content rating and
+  with the Terms of Service]]</span>
+</p>
+
+<h2>12. International transfers</h2>
+<p class="notice">
+  <span class="ph">[[PLACEHOLDER: describe where data is hosted and processed, and the transfer
+  mechanism relied on for any transfer out of the user's region]]</span>
+</p>
+
+<h2>13. Changes to this policy</h2>
+<p>
+  We may update this policy. The document version and effective date at the top always
+  identify the current text, and material changes will be notified in the app before they take
+  effect.
+</p>
+
+<h2>14. Contact</h2>
+<p>
+  <span class="ph">[[PLACEHOLDER: legal entity name]]</span><br />
+  <span class="ph">[[PLACEHOLDER: registered address]]</span><br />
+  <span class="ph">[[PLACEHOLDER: privacy contact email]]</span>
+</p>
+
+<footer>
+  StyliAI Privacy Policy · version 1.0.0 · drafted 2026-08-05 ·
+  <a href="/legal/">document index</a>
+</footer>
+
+</body>
+</html>

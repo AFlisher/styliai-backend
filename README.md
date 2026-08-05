@@ -79,7 +79,7 @@ Migrations are plain `.sql` files in the repository root (**32 of them**). There
 npm run migrate
 ```
 
-`runMigration.js` holds an explicit, **dependency-ordered** schedule: 30 files to apply and 2 marked superseded with the reason. Before connecting to anything it diffs that schedule against the directory and **exits 1** if they disagree — an unlisted file, a scheduled file that is missing, a duplicate, or a file in both lists. Adding a migration without scheduling it is therefore a hard failure, not a silent omission.
+`runMigration.js` holds an explicit, **dependency-ordered** schedule: 34 files to apply and 2 marked superseded with the reason. Before connecting to anything it diffs that schedule against the directory and **exits 1** if they disagree — an unlisted file, a scheduled file that is missing, a duplicate, or a file in both lists. Adding a migration without scheduling it is therefore a hard failure, not a silent omission.
 
 > ### ⚠ Do not sort the schedule alphabetically
 >
@@ -157,7 +157,7 @@ npx jest test/critical         # release-blocker tier
 npx jest -t "avatar"           # by name
 ```
 
-**103 suites · 1,718 tests**, all passing (re-run 2026-08-04). Across all three repositories the project totals **153 suites · 2,178 tests**. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
+**123 suites · 2,222 tests**, all passing (re-run 2026-08-05, Sprint 1). Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
 
 Two conventions worth adopting before adding tests:
 

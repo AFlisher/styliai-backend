@@ -1,0 +1,93 @@
+/* Sprint 1 / B-2 — shared styling for the hosted legal documents.
+ *
+ * Served from the backend's own origin as a static file, so it is covered by
+ * the app's existing helmet CSP (`styleSrc: 'self'`) with no directive change.
+ * No fonts, no scripts, no third-party requests: a legal page that depends on
+ * a CDN is a legal page that can fail to render in exactly the jurisdictions
+ * most likely to block one.
+ */
+
+:root {
+  --ink: #14141c;
+  --muted: #5a5a6e;
+  --rule: #e3e3ec;
+  --accent: #5b4ce0;
+  --flag-bg: #fff5d6;
+  --flag-ink: #6b4b00;
+  --flag-edge: #e6c34a;
+  --bg: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ececf4;
+    --muted: #a2a2b8;
+    --rule: #2a2a38;
+    --accent: #a89bff;
+    --flag-bg: #3a2f0a;
+    --flag-ink: #ffe8a3;
+    --flag-edge: #7a6320;
+    --bg: #101018;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 5rem;
+  max-width: 46rem;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+h1 { font-size: 1.75rem; line-height: 1.25; margin: 0 0 .5rem; letter-spacing: -.01em; }
+h2 { font-size: 1.15rem; margin: 2.25rem 0 .6rem; letter-spacing: -.005em; }
+h3 { font-size: 1rem; margin: 1.5rem 0 .4rem; }
+
+p, li { color: var(--ink); }
+a { color: var(--accent); }
+
+.meta {
+  margin: 0 0 1.75rem;
+  padding: .85rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  font-size: .875rem;
+  color: var(--muted);
+}
+.meta div { margin: .15rem 0; }
+.meta strong { color: var(--ink); font-weight: 600; }
+
+/* Every unresolved company-specific value is wrapped in this, so a reviewer
+ * can find all of them by eye and Ctrl-F can find all of them by string. */
+.ph {
+  background: var(--flag-bg);
+  color: var(--flag-ink);
+  border: 1px dashed var(--flag-edge);
+  border-radius: 4px;
+  padding: 0 .3em;
+  font-weight: 600;
+  font-size: .95em;
+  white-space: nowrap;
+}
+
+.notice {
+  border-left: 3px solid var(--accent);
+  padding: .1rem 0 .1rem 1rem;
+  margin: 1.25rem 0;
+  color: var(--muted);
+}
+
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .925rem; display: block; overflow-x: auto; }
+th, td { border-bottom: 1px solid var(--rule); padding: .55rem .6rem; text-align: left; vertical-align: top; }
+th { font-weight: 600; white-space: nowrap; }
+
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5rem 0; }
+
+footer { margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); font-size: .85rem; color: var(--muted); }
+
+nav.docnav { font-size: .9rem; margin-bottom: 2rem; }
+nav.docnav a { margin-right: 1rem; }

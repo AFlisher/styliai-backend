@@ -565,6 +565,55 @@ paths:
         '200': { description: Password changed, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
         '400': { description: Validation error / wrong current password / Google account, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
 
+  /api/auth/delete-account:
+    post:
+      summary: >
+        Irreversibly delete the authenticated user's own account (Sprint 1 /
+        B-1). Required by Google Play's data deletion policy and App Store
+        Guideline 5.1.1(v). There is no id parameter anywhere in this request -
+        the account erased is always the bearer's own. Every access and refresh
+        token for the account stops working the instant this returns.
+      security: [{ userBearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirmation:
+                  type: string
+                  enum: [DELETE]
+                  description: >
+                    Must be the exact string "DELETE". Confirms intent; it is
+                    not an authentication factor.
+                currentPassword:
+                  type: string
+                  description: >
+                    Required for password accounts. Omitted for Google accounts,
+                    which have no local password to verify and are gated on the
+                    confirmation phrase alone.
+              required: [confirmation]
+      responses:
+        '200':
+          description: >
+            Account deleted. Also returned when the account was already gone,
+            so a client retry is safe.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  deleted: { type: boolean }
+                  alreadyDeleted: { type: boolean }
+                  creationsDeleted: { type: integer }
+                  storageObjectsDeleted: { type: integer }
+        '400': { description: Missing or incorrect confirmation phrase, or missing password, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '401': { description: Not authenticated, or the account no longer exists, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '403': { description: Incorrect password, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+        '500': { description: Erasure failed; the account is unchanged and the request may be retried, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorMessage' } } } }
+
   /api/auth/forgot-password:
     post:
       summary: >

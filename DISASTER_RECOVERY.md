@@ -15,7 +15,7 @@ guarantees is worse than none. **Bold = not yet verified by anyone.**
 
 | Thing | State | Evidence |
 |---|---|---|
-| Schema is rebuildable from the repo | ✅ Yes | `npm run migrate` applies 33 migrations + ledger; `assertScheduleIsComplete()` fails on drift |
+| Schema is rebuildable from the repo | ✅ Yes | `npm run migrate` applies 34 migrations + ledger; `assertScheduleIsComplete()` fails on drift |
 | Schema completeness is checkable | ✅ Yes | `npm run verify:restore` — read-only, exit 0/1 |
 | Independent DB backup exists | ⚠️ Tooling yes, **runs no** | `npm run backup:db` — requires `pg_dump`, **not currently installed on the operator workstation** |
 | Independent storage backup exists | ✅ Tooling proven | `npm run backup:storage` — exercised against production: 91 objects / 82.64 MB, integrity verified, single-byte corruption detected |
@@ -186,6 +186,22 @@ Values that cannot be regenerated without consequence:
 - [ ] Wallet balance for a known user matches expectation
 - [ ] Bucket privacy: `creations` and `avatars` private, `style-images` public
 - [ ] Record actual RPO/RTO achieved in §1
+- [ ] `/legal/privacy-policy.html` returns 200 (Sprint 1 / B-2 — the store-facing URLs are served by this app, so a restored backend that 404s them is a compliance outage, not just a cosmetic one)
+
+> **A restore can resurrect a deleted account, and that is a compliance problem,
+> not just a data problem.** Restoring a backup taken before a user exercised
+> account deletion reinstates their personal data. `account_deletions` is the
+> control: it is the one record that survives the erasure, so after any restore,
+> re-apply every deletion recorded at or after the backup's timestamp.
+>
+> ```sql
+> SELECT user_id, deleted_at FROM account_deletions
+> WHERE deleted_at >= '<backup taken at>' ORDER BY deleted_at;
+> ```
+>
+> If `account_deletions` itself was restored from the same backup it will not
+> list deletions made after that point — export it from the live database
+> *before* overwriting, whenever the live database is still readable.
 
 ---
 

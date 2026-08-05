@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -194,6 +195,38 @@ app.use(auditAdminAction);
 // merely busy, which is how a traffic spike becomes a restart loop.
 app.get('/healthz', healthController.healthz);
 app.get('/readyz', healthController.readyz);
+
+// Sprint 1 / B-2: the hosted legal documents.
+//
+// Google Play and the App Store both require a PUBLICLY REACHABLE privacy
+// policy URL at submission time, and Play additionally requires a public
+// account-deletion URL. In-app text does not satisfy either - a store reviewer
+// must be able to open a link without installing the app. These are served from
+// the backend's own origin because it is the one component that already has a
+// stable public URL, so this adds no infrastructure and no new domain to keep
+// alive; when a marketing domain exists, that domain redirects here and the
+// published URLs keep working.
+//
+// Mounted ABOVE globalLimiter for the same reason the health probes are: a
+// store reviewer or a regulator opening these pages must never be rate limited
+// into thinking the policy is unavailable. They are static, cacheable bytes.
+//
+// Static rather than templated, deliberately: legal text that is assembled at
+// request time is legal text whose exact published wording cannot be
+// reconstructed later from the repository.
+app.use(
+  '/legal',
+  express.static(path.join(__dirname, '..', 'public', 'legal'), {
+    // The documents change rarely and are read by crawlers and reviewers; an
+    // hour is long enough to be cheap and short enough that a correction is
+    // visible the same day.
+    maxAge: '1h',
+    // A legal URL that 404s because someone omitted `.html` is a failed store
+    // review, so both forms resolve.
+    extensions: ['html'],
+    index: 'index.html',
+  })
+);
 
 // SEC-11.1: the backstop.
 //

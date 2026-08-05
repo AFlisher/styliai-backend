@@ -21,6 +21,9 @@ Run through this before promoting a build.
 - [ ] `GET /readyz` → `200 {"status":"ready","checks":{"database":true,"storage":true}}`
 - [ ] `GET /api/creations` → `401` (auth wired)
 - [ ] Any 4xx response carries an `X-Request-Id` header.
+- [ ] `GET /legal/privacy-policy.html` → `200` **from a signed-out browser** (Sprint 1 / B-2). This is the URL submitted to both stores; a 404 here is a rejected submission, and it is not exercised by any user-facing flow, so nothing else will notice it broke.
+- [ ] `GET /legal/account-deletion.html` → `200` (Google Play requires this as a public URL).
+- [ ] `POST /api/auth/delete-account` with no `Authorization` header → `401`.
 
 **Storage posture** (verify, do not assume)
 - [ ] `creations` — private
@@ -349,6 +352,83 @@ Not yet implemented — this is the recommendation, not a description.
 - **Storage:** `creations` and `avatars` hold user content that exists nowhere else. No backup exists today; object versioning or a scheduled copy to a second bucket is the minimum.
 - **Secrets:** keep `ADMIN_JWT_SECRET` and especially `MFA_ENCRYPTION_KEY` in a password manager or secret store outside Railway. Losing the MFA key locks out every enrolled admin permanently.
 - **Retention:** define one before enabling backups — copies of user photos are copies of personal data.
+
+---
+
+## 7b. Account deletion (Sprint 1 / B-1)
+
+`POST /api/auth/delete-account` — authenticated, irreversible, and the only
+deletion path. There is no admin-initiated equivalent and no id parameter: the
+account erased is always the caller's own.
+
+**What it removes.** The `public.users` row, and by `ON DELETE CASCADE`:
+`profiles`, `creations`, `favorites`, `notifications`, `wallet_transactions`,
+`daily_rewards`, `refresh_tokens`, `generation_events`, `generation_feedback`,
+`generation_idempotency`, `abuse_findings`, `user_risk_scores`. Then, after the
+commit, the stored objects: every creation image and thumbnail (via the shared
+`creationAssetCleanup` guard) and the avatar object.
+
+**Session revocation is the row deletion.** `authMiddleware` reads session state
+from `public.users` on every authenticated request and refuses when the row is
+absent, so every outstanding access token dies at commit time. There is no
+denylist and no window to wait out.
+
+**What deliberately survives, and why.**
+
+| Kept | Rationale |
+|---|---|
+| `account_deletions` row | PII-free attestation that the erasure happened. Holds a dangling UUID, timestamp, counts. No FK to `users` — an FK would destroy the evidence with the account. |
+| `integrity_verdicts` row, `user_id` set to `NULL` | Anti-replay ledger. Deleting inside the reuse window would let a spent Play Integrity token be presented again. Self-evicts on `PLAY_INTEGRITY_LEDGER_TTL_MS` (24h default). |
+| `admin_audit_log` | Admin accountability trail. Records who acted on whom; an account is not an audit trail. |
+
+`processed_ad_transactions` rows **are** deleted: with the user row gone there is
+nobody for a replayed AdMob callback to credit.
+
+**Operating notes.**
+- A partial storage erasure sets `account_deletions.storage_erasure_complete = FALSE`. Find them with:
+  ```sql
+  SELECT user_id, deleted_at FROM account_deletions WHERE NOT storage_erasure_complete;
+  ```
+  and reclaim the objects with `npm run reconcile-creations`. The database rows are already gone in this state — only objects are outstanding.
+- A failed deletion returns **500 and leaves the account intact**; the transaction rolls back as a unit. It is safe for the client to retry.
+- Audit events: `audit_event` with `action: "account_deletion"` and outcome `started` → `success` / `failure` / `already_deleted`.
+
+**The limit worth knowing.** Under `IMAGE_PROVIDER=fal` (the current production
+setting) source photos are uploaded to fal's CDN under a public URL with
+retention outside our control and **no delete call available to us**. Deletion
+erases every copy we hold; it cannot retract those. This is disclosed in the
+hosted Privacy Policy §4 and Account Deletion Policy, and is the reason those
+documents carry a placeholder to name the provider and link its retention terms
+before publication.
+
+---
+
+## 7c. Hosted legal documents (Sprint 1 / B-2)
+
+Served as static files from `public/legal/`, mounted at `/legal` **above** the
+global rate limiter — a store reviewer must never be throttled into believing
+the policy is unavailable.
+
+| URL | Required by |
+|---|---|
+| `/legal/privacy-policy.html` | Google Play **and** App Store, at submission |
+| `/legal/terms-of-service.html` | Store listings; referenced from the paywall |
+| `/legal/account-deletion.html` | Google Play, as a public deletion URL |
+| `/legal/` | Index with versions and changelog |
+
+**They are drafts.** Every company-specific or jurisdictional value is marked
+`[[PLACEHOLDER: …]]`. Before submission:
+
+```bash
+grep -rn "\[\[PLACEHOLDER" public/legal/
+```
+
+must return **nothing**. There are 20 distinct placeholders today. This is a
+release gate, not a suggestion — publishing a policy that still says
+`[[PLACEHOLDER: legal entity name]]` is worse than publishing none.
+
+When a marketing domain exists, point it at these URLs by redirect rather than
+copying the text, so there is exactly one canonical version.
 
 ---
 

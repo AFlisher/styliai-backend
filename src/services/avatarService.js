@@ -32,6 +32,7 @@ const supabase = require("../config/supabase");
 const db = require("../config/db");
 const imageMetadataSanitizer = require("../utils/imageMetadataSanitizer");
 const creationAssetCleanup = require("./creationAssetCleanup");
+const { logger } = require("../utils/logger");
 
 const AVATAR_BUCKET = "avatars";
 
@@ -296,8 +297,59 @@ async function resolveAvatarDelivery(userId) {
   return { kind: "signed", url: data.signedUrl };
 }
 
+/**
+ * Erases the caller's avatar object. Sprint 1 / B-1.
+ *
+ * This lives here rather than in creationAssetCleanup because `avatars` is
+ * deliberately absent from that module's DELETABLE_BUCKETS allow-list, and that
+ * absence is a safety property worth keeping: the generic eraser is driven by
+ * URLs read out of content rows, and letting it reach avatars would put profile
+ * pictures one bad URL away from deletion. Account deletion is the one caller
+ * that legitimately needs the avatar gone, so it asks the service that owns the
+ * bucket, by user id, for exactly one deterministic object.
+ *
+ * The path is reconstructed from the user id rather than parsed out of
+ * `profiles.avatar_url` on purpose. replaceAvatar() writes `<userId>.jpg` with
+ * `upsert: true`, so that is the only object this user can ever own here; the
+ * stored URL additionally carries a `?v=` cache-buster and may point at an
+ * external provider picture instead (Google's, for OAuth accounts), neither of
+ * which addresses an object we can remove.
+ *
+ * NEVER THROWS, matching creationAssetCleanup's contract and for the same
+ * reason: the account rows are already gone by the time this runs. A failure
+ * here leaves one orphaned object, which is recoverable; propagating it would
+ * turn a completed erasure into a 500 and invite the user to retry a deletion
+ * that already succeeded.
+ *
+ * Removing a key that does not exist is not an error in the Storage API, so the
+ * no-avatar case needs no special handling and a retry is safe.
+ *
+ * @returns {Promise<{deleted: number}>} 1 when the object was removed, 0 otherwise.
+ */
+async function deleteAvatar(userId) {
+  const path = `${userId}.jpg`;
+
+  try {
+    const { error } = await supabase.storage.from(AVATAR_BUCKET).remove([path]);
+    if (error) throw new Error(error.message);
+
+    logger.info("avatar_erasure", { userId, bucket: AVATAR_BUCKET, outcome: "deleted" });
+    return { deleted: 1 };
+  } catch (err) {
+    logger.error("avatar_erasure", {
+      userId,
+      bucket: AVATAR_BUCKET,
+      outcome: "failed",
+      // Message only - never the error object, per SEC-7.3.
+      error: (err && err.message) || "unknown",
+    });
+    return { deleted: 0 };
+  }
+}
+
 module.exports = {
   replaceAvatar,
+  deleteAvatar,
   buildAvatarJpeg,
   resolveAvatarDelivery,
   AvatarValidationError,
