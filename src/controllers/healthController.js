@@ -76,11 +76,11 @@ async function readyz(req, res) {
   }
 
   try {
-    // Required lazily, not at module load. config/supabase constructs its
-    // client on import and throws without SUPABASE_URL, so requiring it at the
-    // top would make merely loading app.js fail in every suite that has not
-    // mocked it - and a health check must never be the reason the app cannot
-    // start.
+    // Required lazily rather than at module load. config/supabase now defers
+    // its own client construction to first use (see that file), so this is no
+    // longer load-bearing for correctness the way it once was - but a health
+    // check still has no reason to pull in anything before it is actually
+    // asked to check, so the lazy require stays.
     const supabase = require("../config/supabase");
     const { error } = await withTimeout(supabase.storage.getBucket("avatars"), "storage");
     if (error) throw new Error(error.message);
