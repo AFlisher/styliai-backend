@@ -157,7 +157,7 @@ npx jest test/critical         # release-blocker tier
 npx jest -t "avatar"           # by name
 ```
 
-**123 suites · 2,222 tests**, all passing (re-run 2026-08-05, Sprint 1). Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
+**123 suites · 2,234 tests**, all passing (re-run 2026-08-05, Sprint 1). The total moves when files are added or removed, not only when tests are: `test/medium/secrets.medium.test.js` runs one case per **git-tracked** file, so an untracked new file is invisible to it and a committed one is not. Count after committing. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
 
 Two conventions worth adopting before adding tests:
 
