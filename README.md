@@ -39,7 +39,7 @@ Full data model, request flows and API inventory: **[`../SYSTEM_ARCHITECTURE.md`
 
 | | |
 |---|---|
-| **Node.js** | 20+ recommended; developed and tested on 24.x. There is no `engines` field — the runtime is not currently pinned. |
+| **Node.js** | `engines` requires **>=20**; developed and tested on 24.x, which is also what CI runs. |
 | **PostgreSQL** | Supabase-hosted. A connection string is required; the schema is not created automatically (see [Database migrations](#database-migrations)). |
 | **Supabase project** | Storage buckets `creations`, `avatars` (both **private**) and `style-images` (public catalog). |
 | **Native build tools** | `sharp` and `bcrypt` ship prebuilt binaries; a compiler toolchain is only needed if a prebuild is unavailable for your platform. |
@@ -88,7 +88,7 @@ npm run migrate
 Three things the runner deliberately does not do:
 
 - **It is not transactional across files.** A mid-run failure leaves the database partially migrated; the error message says so, names the file, and reports how many applied. Every migration is guarded (`IF NOT EXISTS`, `DO $$` blocks), so re-running after a fix is a no-op for everything that already succeeded.
-- **It does not track what has run.** There is no ledger table — idempotency comes from the guards, not from bookkeeping.
+- **It does not decide what to run from the ledger.** `schema_migrations` records what was applied (and its checksum), but the runner replays the whole schedule every time — idempotency comes from the guards, not from bookkeeping. The ledger is what `verify:restore` and the `/readyz` migration check read.
 - **It does not provision Supabase Storage.** No migration creates the `creations`, `avatars` or `style-images` buckets. **A rebuilt database is not by itself a rebuilt system** — this remains part of **SEC-21.1**.
 
 > **History:** until 2026-08-04 the runner applied a hand-maintained list of **18 of the 32 files then present**, and nothing failed when the other 14 were added without being listed. A fresh database was missing the columns `POST /api/auth/register` inserts into (`verification_token_hash`, `country_code`, `country_name`), the entire admin security layer (roles, MFA, audit log, lockout), and every `ENABLE ROW LEVEL SECURITY` statement in the repository. The runner also swallowed errors — it logged a failure and exited **0**. Both are fixed; the completeness check is what prevents a recurrence.
@@ -100,18 +100,19 @@ Three things the runner deliberately does not do:
 ## Running locally
 
 ```bash
-npm start          # if a start script is added; otherwise:
-node server.js
+npm start
 ```
 
 Then:
 
 ```bash
 curl localhost:3000/healthz   # {"status":"ok","uptimeSeconds":…}
-curl localhost:3000/readyz    # {"status":"ready","checks":{"database":true,"storage":true}}
+curl localhost:3000/readyz    # {"status":"ready","checks":{"database":true,"storage":true,"migrations":true}}
 ```
 
-`/readyz` returns **503** when the database or storage is unreachable. `/healthz` deliberately checks nothing — liveness must not depend on a dependency, or a database blip becomes a restart loop.
+`/readyz` returns **503** when the database or storage is unreachable, or when the live schema is behind this build's migration schedule (Sprint 3 / H-9) — a deploy that outran `npm run migrate` is held out of rotation rather than left to 500 on whichever endpoint touches the missing column. `/healthz` deliberately checks nothing — liveness must not depend on a dependency, or a database blip becomes a restart loop.
+
+The process also drains on `SIGTERM` rather than dying with requests in flight. That matters because a generation deducts credits *before* calling the provider and refunds them in a `catch`: killed in between, the charge is committed and the refund never runs.
 
 ### Operational scripts
 
@@ -157,7 +158,7 @@ npx jest test/critical         # release-blocker tier
 npx jest -t "avatar"           # by name
 ```
 
-**126 suites · 2,320 tests**, all passing (re-run 2026-08-05, Sprint 2). The total moves when files are added or removed, not only when tests are: `test/medium/secrets.medium.test.js` runs one case per **git-tracked** file, so an untracked new file is invisible to it and a committed one is not. Count after committing. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
+**129 suites · 2,365 tests**, all passing (re-run 2026-08-05, Sprint 3). The total moves when files are added or removed, not only when tests are: `test/medium/secrets.medium.test.js` runs one case per **git-tracked** file, so an untracked new file is invisible to it and a committed one is not. Count after committing. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
 
 Two conventions worth adopting before adding tests:
 
