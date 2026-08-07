@@ -73,27 +73,28 @@ Two boot-time behaviours worth knowing:
 
 ## Database migrations
 
-Migrations are plain `.sql` files in the repository root (**32 of them**). There is no migration framework, no ledger table, and no down-migrations.
+Migrations are plain `.sql` files in the repository root (**39 of them**, plus the bootstrap ledger migration). There is no migration framework and no down-migrations.
 
 ```bash
 npm run migrate
 ```
 
-`runMigration.js` holds an explicit, **dependency-ordered** schedule: 30 files to apply and 2 marked superseded with the reason. Before connecting to anything it diffs that schedule against the directory and **exits 1** if they disagree — an unlisted file, a scheduled file that is missing, a duplicate, or a file in both lists. Adding a migration without scheduling it is therefore a hard failure, not a silent omission.
+`runMigration.js` holds an explicit, **dependency-ordered** schedule: 36 files to apply, 2 marked superseded with the reason, plus `migration_schema_migrations.sql` bootstrapped first as the ledger. Before connecting to anything it diffs that schedule against the directory and **exits 1** if they disagree — an unlisted file, a scheduled file that is missing, a duplicate, or a file in both lists. Adding a migration without scheduling it is therefore a hard failure, not a silent omission.
 
 > ### ⚠ Do not sort the schedule alphabetically
 >
 > The order in `MIGRATIONS` is the order these migrations were written and applied, and it encodes real dependencies. Alphabetically, `migration_admin_audit_log.sql` sorts **29 places before** `migration_wallet_ledger.sql`, so its `ALTER TABLE wallet_transactions ADD COLUMN admin_id` would run long before that table exists; `migration_auto_tags.sql` likewise sorts before `migration_catalog.sql`, which creates the `styles` table it reads. A glob-and-sort runner fails on a fresh database. **Append new migrations at the end; never reorder existing entries.**
 
-Three things the runner deliberately does not do:
+Two things the runner deliberately does not do:
 
 - **It is not transactional across files.** A mid-run failure leaves the database partially migrated; the error message says so, names the file, and reports how many applied. Every migration is guarded (`IF NOT EXISTS`, `DO $$` blocks), so re-running after a fix is a no-op for everything that already succeeded.
-- **It does not track what has run.** There is no ledger table — idempotency comes from the guards, not from bookkeeping.
 - **It does not provision Supabase Storage.** No migration creates the `creations`, `avatars` or `style-images` buckets. **A rebuilt database is not by itself a rebuilt system** — this remains part of **SEC-21.1**.
 
-> **History:** until 2026-08-04 the runner applied a hand-maintained list of **18 of the 32** files, and nothing failed when the other 14 were added without being listed. A fresh database was missing the columns `POST /api/auth/register` inserts into (`verification_token_hash`, `country_code`, `country_name`), the entire admin security layer (roles, MFA, audit log, lockout), and every `ENABLE ROW LEVEL SECURITY` statement in the repository. The runner also swallowed errors — it logged a failure and exited **0**. Both are fixed; the completeness check is what prevents a recurrence.
+**It does track what has run.** SEC-21.1 (Phase 9) added `schema_migrations`, bootstrapped before every other migration so even a fresh database records its own history from the first file onward: `filename`, a content checksum (newline-normalised, so a Windows vs. Linux checkout hashes identically), `applied_at` (set once), and `last_run_at`/`run_count` for replays. A stored checksum that no longer matches its file is reported as **checksum drift** — an already-applied migration edited after the fact — as a warning rather than a failed run; see `RELEASE.md` for what that implies for rollback. `npm run verify:restore` reads this table (read-only) to report exactly which scheduled migrations a given database has not yet received.
 
-**Convention used throughout this project:** a migration is written *and immediately applied* to the live database in the same change. There is no "pending migrations" state.
+> **History:** until 2026-08-04 the runner applied a hand-maintained list of **18 of the 32** files then in the repository, and nothing failed when the other 14 were added without being listed. A fresh database was missing the columns `POST /api/auth/register` inserts into (`verification_token_hash`, `country_code`, `country_name`), the entire admin security layer (roles, MFA, audit log, lockout), and every `ENABLE ROW LEVEL SECURITY` statement in the repository. The runner also swallowed errors — it logged a failure and exited **0**. Both are fixed; the completeness check is what prevents a recurrence.
+
+**Convention used throughout this project:** a migration is written *and immediately applied* to the live database in the same change — so any migration on disk that `schema_migrations` shows as never applied is a release blocker, not a normal in-between state.
 
 ---
 
@@ -157,7 +158,7 @@ npx jest test/critical         # release-blocker tier
 npx jest -t "avatar"           # by name
 ```
 
-**103 suites · 1,718 tests**, all passing (re-run 2026-08-04). Across all three repositories the project totals **153 suites · 2,178 tests**. Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
+**132 suites · 2,295 tests**, all passing (re-run 2026-08-07). Across all three repositories the project totals **185 suites · 2,798 tests** (backend 132/2,295, `admin_dashboard` 12/108, `prompt_app` 41/395). Structure and rationale: **[`docs/qa/QA_TEST_PLAN.md`](docs/qa/QA_TEST_PLAN.md)**; latest run: **[`docs/qa/QA_EXECUTION_REPORT.md`](docs/qa/QA_EXECUTION_REPORT.md)**.
 
 Two conventions worth adopting before adding tests:
 
@@ -215,8 +216,11 @@ This service has been through a full security audit (94 findings) and an extende
 
 | Gap | Tracked as |
 |---|---|
-| No backups; storage holds the only copy of user content | SEC-21.1 / 21.2 / 21.3 |
-| Logs are emitted structurally but never shipped, retained or alerted on | SEC-16.5 |
-| No crash reporting; no AI-provider error rate | SEC-20.1 / 20.2 |
 | No account-deletion path — a Google Play submission requirement | `../LEGAL_REQUIREMENTS.md` |
 | Purchases/IAP unimplemented; must ship with server-side verification | SEC-6.1 |
+
+**Closed since the previous revision of this table:**
+
+- **No backups; storage holds the only copy of user content** (SEC-21.1/21.2/21.3) — `npm run backup:db`/`backup:storage` plus `verify:restore`, documented in `DISASTER_RECOVERY.md` (Phase 9).
+- **Logs are emitted structurally but never shipped, retained or alerted on** (SEC-16.5) — `auth_failure`/`authz_failure` now persist to the queryable `security_events` table (Operations Center module, `migration_security_events.sql`); the log line itself is unchanged, this is a second write.
+- **No crash reporting; no AI-provider error rate** (SEC-20.1/20.2) — image-generation-provider failures now persist to `system_incidents`, surfaced via the System Health module (`GET /api/admin/system-health(/incidents)`, `migration_system_health.sql`).
