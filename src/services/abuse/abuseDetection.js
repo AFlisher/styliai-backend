@@ -330,4 +330,13 @@ function resetSweepState() {
   sweeping = false;
 }
 
-module.exports = { runSweep, maybeSweep, resetSweepState, handleFinding };
+/**
+ * System Health module: the in-memory sweep state, read-only. Same shape as
+ * integrityLedgerSweeper.getStatus() - `lastSweepAt` is `null` until the
+ * first sweep this process has actually started, rather than the epoch.
+ */
+function getSweepStatus() {
+  return { lastSweepAt: lastSweepAt ? new Date(lastSweepAt).toISOString() : null, sweeping };
+}
+
+module.exports = { runSweep, maybeSweep, resetSweepState, handleFinding, getSweepStatus };

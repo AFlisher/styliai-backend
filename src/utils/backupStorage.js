@@ -11,6 +11,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const supabase = require("../config/supabase");
+const backupRunModel = require("../models/backupRunModel");
 
 /**
  * SEC-21.3 - an independent copy of the object storage.
@@ -172,6 +173,26 @@ async function backupStorage({
     Object.values(manifest.buckets).every((b) => !b.truncated);
 
   fs.writeFileSync(path.join(root, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+
+  // System Health module (SEC-21.1/21.3): status reflects manifest.complete,
+  // not just "did the script finish" - an incomplete backup (truncated
+  // listing, unreadable objects) must not read as a success on the dashboard.
+  // Never allowed to turn a written manifest into a reported failure.
+  try {
+    await backupRunModel.record({
+      kind: "storage",
+      status: manifest.complete ? "success" : "failed",
+      bytes: manifest.totalBytes,
+      objectCount: manifest.totalObjects,
+      detail: {
+        buckets: Object.keys(manifest.buckets),
+        failureCount: manifest.failures ? manifest.failures.length : 0,
+      },
+    });
+  } catch (err) {
+    console.error(`[backupStorage] failed to record backup run: ${err.message}`);
+  }
+
   return { root, manifest };
 }
 

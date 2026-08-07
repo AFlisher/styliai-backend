@@ -8,6 +8,7 @@ const db = require("../../config/db");
 const {
   record,
   recordWithClient,
+  list,
   sanitizePayload,
   MAX_PAYLOAD_BYTES,
 } = require("../adminAuditModel");
@@ -194,5 +195,80 @@ describe("recordWithClient", () => {
     // fail-closed guarantee: the audit row would commit independently of the
     // balance change it is supposed to be atomic with.
     expect(db.query).not.toHaveBeenCalled();
+  });
+});
+
+// Operations Center: the read side of this table. Same query-shape
+// conventions as adminController.listUsers - two queries (page + count)
+// sharing one WHERE clause.
+describe("list", () => {
+  beforeEach(() => {
+    db.query
+      .mockResolvedValueOnce({ rows: [{ id: "audit-1" }] })
+      .mockResolvedValueOnce({ rows: [{ total: 1 }] });
+  });
+
+  it("returns rows and total for an unfiltered page", async () => {
+    const result = await list({ limit: 50, offset: 0 });
+
+    expect(result).toEqual({ rows: [{ id: "audit-1" }], total: 1 });
+    const [listSql, listParams] = db.query.mock.calls[0];
+    expect(listSql).not.toContain("WHERE");
+    expect(listParams).toEqual([50, 0]);
+  });
+
+  it("splits a comma-separated action filter into an ANY(text[]) match", async () => {
+    await list({
+      limit: 50,
+      offset: 0,
+      action: "POST /api/admin/users/:id/suspend,POST /api/admin/users/:id/reinstate",
+    });
+
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toContain("action = ANY($1::text[])");
+    expect(params[0]).toEqual([
+      "POST /api/admin/users/:id/suspend",
+      "POST /api/admin/users/:id/reinstate",
+    ]);
+  });
+
+  it("combines targetType, adminId, q and a date range into one AND-joined WHERE", async () => {
+    await list({
+      limit: 50,
+      offset: 0,
+      targetType: "users",
+      adminId: "admin-1",
+      q: "Jane",
+      from: "2026-01-01T00:00:00.000Z",
+      to: "2026-01-31T23:59:59.000Z",
+    });
+
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toContain("target_type = $1");
+    expect(sql).toContain("admin_id = $2");
+    expect(sql).toContain("LOWER(action) LIKE $3");
+    expect(sql).toContain("created_at >= $4");
+    expect(sql).toContain("created_at <= $5");
+    expect(params).toEqual([
+      "users",
+      "admin-1",
+      "%jane%",
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-31T23:59:59.000Z",
+      50,
+      0,
+    ]);
+  });
+
+  it("uses the same WHERE clause for the count query as the list query", async () => {
+    await list({ limit: 50, offset: 0, targetType: "users", q: "delete" });
+
+    const [listSql, listParams] = db.query.mock.calls[0];
+    const [countSql, countParams] = db.query.mock.calls[1];
+
+    const listWhere = listSql.slice(listSql.indexOf("WHERE"), listSql.indexOf("ORDER BY"));
+    const countWhere = countSql.slice(countSql.indexOf("WHERE"));
+    expect(countWhere.trim()).toBe(listWhere.trim());
+    expect(countParams).toEqual(listParams.slice(0, -2));
   });
 });

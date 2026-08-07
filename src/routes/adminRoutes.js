@@ -7,6 +7,8 @@ const stabilityController = require("../controllers/stabilityController");
 const adminAuthMiddleware = require("../middleware/adminAuthMiddleware");
 const { requireAdminRoleFor } = require("../middleware/requireAdminRole");
 const abuseController = require("../controllers/abuseController");
+const operationsController = require("../controllers/operationsController");
+const systemHealthController = require("../controllers/systemHealthController");
 const { adminLoginLimiter, adminActionLimiter, adminGenerationPreviewLimiter } = require("../middleware/rateLimiters");
 const { uuidParams } = require("../middleware/validateRequest");
 
@@ -59,6 +61,21 @@ router.get("/abuse/risk", adminActionLimiter, adminAuthMiddleware, requireAdminR
 router.get("/abuse/users/:id/sessions", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/abuse/users/:id/sessions"), uuidParams("id"), abuseController.userSessions);
 router.post("/abuse/findings/:id/review", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/abuse/findings/:id/review"), uuidParams("id"), abuseController.reviewFinding);
 router.post("/abuse/sweep", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/abuse/sweep"), abuseController.runSweepNow);
+
+// Operations Center: read-only views over admin_audit_log, security_events
+// and the purchase/ad-reward verification ledgers. Superadmin tier - see
+// operationsController.js and adminRoutePolicy.js for why (raw IPs, admin
+// emails, cross-account history, a broader exposure than abuse/findings).
+router.get("/audit-log", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/audit-log"), operationsController.listAuditLog);
+router.get("/security-events", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/security-events"), operationsController.listSecurityEvents);
+router.get("/purchases/verification-history", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/purchases/verification-history"), operationsController.listPurchaseVerifications);
+
+// System Health module: a rich, authenticated diagnostic view (backend/db/
+// storage/email/image-provider/queue/scheduled-jobs/env/version/migrations/
+// backups) plus its incident history. Viewer tier, same as /api/admin/stats
+// and /api/admin/metrics - aggregate reads, no PII, no writes, no spend.
+router.get("/system-health", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/system-health"), systemHealthController.getSystemHealth);
+router.get("/system-health/incidents", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/system-health/incidents"), systemHealthController.listIncidents);
 
 // Admin-only Stability AI testing tool (Style Manager's "Test Prompt" modal).
 // No wallet charge, no creation-history write - see stabilityController for why.

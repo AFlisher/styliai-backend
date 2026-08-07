@@ -17,6 +17,7 @@
 
 const { logger } = require("./logger");
 const metrics = require("./metrics");
+const securityEventModel = require("../models/securityEventModel");
 
 /** Shared envelope: what request was this, and who was making it. */
 function context(req) {
@@ -41,13 +42,31 @@ function context(req) {
  */
 function logAuthFailure(req, { reason, subject } = {}) {
   metrics.increment("auth_failures");
-  logger.warn("auth_failure", { ...context(req), reason, subject });
+  const ctx = context(req);
+  logger.warn("auth_failure", { ...ctx, reason, subject });
+  // Fire-and-forget: this runs on the hot path of every failed login and
+  // token check, so a Postgres hiccup must never delay or fail the response
+  // that's already been decided. securityEventModel.record() never throws
+  // (see there), but the .catch() is defense in depth around that contract.
+  securityEventModel
+    .record({ eventType: "auth_failure", reason, subject, ...ctx })
+    .catch(() => {});
 }
 
 /** Authenticated, but not permitted. Distinct from the above on purpose. */
 function logAuthzFailure(req, { reason, required, actual } = {}) {
   metrics.increment("authz_failures");
-  logger.warn("authz_failure", { ...context(req), reason, required, actual });
+  const ctx = context(req);
+  logger.warn("authz_failure", { ...ctx, reason, required, actual });
+  securityEventModel
+    .record({
+      eventType: "authz_failure",
+      reason,
+      subject: ctx.userId || ctx.adminId,
+      detail: { required, actual },
+      ...ctx,
+    })
+    .catch(() => {});
 }
 
 /**

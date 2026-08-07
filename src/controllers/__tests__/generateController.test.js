@@ -55,6 +55,23 @@ function makeReqRes({ file = { buffer: Buffer.from("x") }, styleId = "style-1" }
 const ENABLED_STYLE = { id: "style-1", categoryId: "category-1", name: "Test Style", creditCost: 2, isEnabled: true };
 
 describe("generateController.generateImage", () => {
+  let originalBackendUrl;
+
+  beforeAll(() => {
+    // Deterministic regardless of a locally-loaded .env: withDeliveryUrls()
+    // prefers BACKEND_URL over the request-derived origin, and this suite's
+    // fake `req` has no `.get()`, so these tests must run with it unset to
+    // get the raw storage URLs they assert on (same seam as
+    // creationsController.delivery.test.js, which pins BACKEND_URL instead
+    // because it asserts on the rewritten form).
+    originalBackendUrl = process.env.BACKEND_URL;
+    delete process.env.BACKEND_URL;
+  });
+
+  afterAll(() => {
+    if (originalBackendUrl !== undefined) process.env.BACKEND_URL = originalBackendUrl;
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     styleModel.getStyleById.mockResolvedValue(ENABLED_STYLE);

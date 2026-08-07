@@ -157,9 +157,92 @@ async function recordWithClient(client, entry) {
   return result.rows[0];
 }
 
+const LIST_COLUMNS = `
+  id, admin_id AS "adminId", admin_email AS "adminEmail", action,
+  target_type AS "targetType", target_id AS "targetId", before, after,
+  ip, request_url AS "requestUrl", status_code AS "statusCode",
+  created_at AS "createdAt"
+`;
+
+/**
+ * Builds the shared WHERE clause for list()/count() so the two can never see
+ * a different row set - the classic bug where a filter is added to one query
+ * and forgotten in the other, producing a page count that doesn't match what
+ * was paged through.
+ */
+function buildFilters({ action, targetType, adminId, q, from, to }) {
+  const where = [];
+  const params = [];
+
+  // `action` accepts a single value or a comma-separated list, so one
+  // endpoint serves both "everything" and "just suspend + reinstate" (the
+  // Operations Center's per-category tabs) without a second query shape.
+  if (action) {
+    const actions = String(action)
+      .split(",")
+      .map((a) => a.trim())
+      .filter(Boolean);
+    if (actions.length) {
+      params.push(actions);
+      where.push(`action = ANY($${params.length}::text[])`);
+    }
+  }
+  if (targetType) {
+    params.push(targetType);
+    where.push(`target_type = $${params.length}`);
+  }
+  if (adminId) {
+    params.push(adminId);
+    where.push(`admin_id = $${params.length}`);
+  }
+  if (q && String(q).trim()) {
+    params.push(`%${String(q).trim().toLowerCase()}%`);
+    where.push(
+      `(LOWER(action) LIKE $${params.length} OR LOWER(COALESCE(target_id, '')) LIKE $${params.length} ` +
+        `OR LOWER(COALESCE(admin_email, '')) LIKE $${params.length} OR LOWER(COALESCE(target_type, '')) LIKE $${params.length})`
+    );
+  }
+  if (from) {
+    params.push(from);
+    where.push(`created_at >= $${params.length}`);
+  }
+  if (to) {
+    params.push(to);
+    where.push(`created_at <= $${params.length}`);
+  }
+
+  return { whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
+}
+
+/**
+ * The Operations Center's read side of this table (SEC-15.1's write side is
+ * above). Offset-paginated to match listUsers' precedent rather than the
+ * keyset cursor pagination.js also offers - this is an operator scrolling a
+ * few pages deep on a filtered view, not an unbounded feed.
+ *
+ * list({limit, offset, action, targetType, adminId, q, from, to}) -> {rows, total}
+ */
+async function list({ limit, offset, action, targetType, adminId, q, from, to } = {}) {
+  const { whereSql, params } = buildFilters({ action, targetType, adminId, q, from, to });
+
+  const rows = await db.query(
+    `SELECT ${LIST_COLUMNS}
+       FROM admin_audit_log
+       ${whereSql}
+      ORDER BY created_at DESC, id DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, limit, offset]
+  );
+
+  const countRes = await db.query(`SELECT COUNT(*)::int AS total FROM admin_audit_log ${whereSql}`, params);
+
+  return { rows: rows.rows, total: countRes.rows[0]?.total ?? 0 };
+}
+
 module.exports = {
   record,
   recordWithClient,
+  list,
   sanitizePayload,
   MAX_PAYLOAD_BYTES,
 };

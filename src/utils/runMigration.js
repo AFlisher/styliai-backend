@@ -84,7 +84,13 @@ const MIGRATIONS = [
   'migration_abuse_detection.sql',              // Phase 8: SEC-18.1/18.3/18.5 (alters users + refresh_tokens)
 
   // --- User Management & Moderation module -----------------------------------
-  'migration_user_account_deletion.sql'         // adds 'deleted' to users_status_check (requires migration_session_revocation.sql)
+  'migration_user_account_deletion.sql',        // adds 'deleted' to users_status_check (requires migration_session_revocation.sql)
+
+  // --- Operations Center module ------------------------------------------------
+  'migration_security_events.sql',              // persisted auth_failure/authz_failure history
+
+  // --- System Health module ----------------------------------------------------
+  'migration_system_health.sql'                 // system_incidents + backup_runs
 ];
 
 /**

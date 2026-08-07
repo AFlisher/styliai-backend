@@ -61,6 +61,12 @@ const ADMIN_ROUTE_POLICY = Object.freeze({
   "GET /api/admin/stats/countries": "viewer",
   "GET /api/admin/analytics/generation/overview": "viewer",
   "GET /api/admin/analytics/generation/summary": "viewer",
+  // System Health module: composed entirely from aggregate reads (pool
+  // stats, storage usage, sweep timestamps, schema_migrations, backup_runs)
+  // plus an environment summary that is already redacted at its source
+  // (envSummary.js) - no PII, no writes. Same tier as metrics/stats.
+  "GET /api/admin/system-health": "viewer",
+  "GET /api/admin/system-health/incidents": "viewer",
 
   // --- money, pricing and user records ---
   "GET /api/admin/users/search": "superadmin",
@@ -99,6 +105,15 @@ const ADMIN_ROUTE_POLICY = Object.freeze({
   "POST /api/credit-packs": "superadmin",
   "PUT /api/credit-packs/:id": "superadmin",
   "DELETE /api/credit-packs/:id": "superadmin",
+
+  // Operations Center. superadmin, one tier above the abuse-findings reads:
+  // these rows carry raw request IPs and admin emails across the WHOLE admin
+  // surface (not scoped to findings' bounded evidence shape), so they sit
+  // with the other PII/money-adjacent reads rather than with the aggregate
+  // viewer-tier ones.
+  "GET /api/admin/audit-log": "superadmin",
+  "GET /api/admin/security-events": "superadmin",
+  "GET /api/admin/purchases/verification-history": "superadmin",
 
   // --- catalog authoring ---
   "POST /api/admin/ai/generate-preview": "editor",

@@ -1,6 +1,11 @@
 /**
  * SEC-7.3 — structured provider-error logging for the generation path.
  *
+ * System Health module addendum: this now ALSO persists to system_incidents
+ * via systemIncidentModel, so "recent image-provider incidents" is queryable
+ * from the admin dashboard instead of only greppable from Railway's log
+ * stream. See systemIncidentModel.js and migration_system_health.sql.
+ *
  * Replaces four verbose sites that logged whole error objects:
  * `falProvider`'s `console.dir(err, { depth: null })` plus its raw
  * `err.response` / `err.body` dumps, and the two controllers' bare
@@ -27,6 +32,8 @@
  * SEC-16.2 / 16.4 / 16.5 (P5). Today they go to Railway stdout with no drain
  * and no retention policy.
  */
+
+const systemIncidentModel = require("../models/systemIncidentModel");
 
 /**
  * Error messages are allowlisted, but a provider is free to put anything in
@@ -98,24 +105,45 @@ function statusOf(err) {
  */
 function logProviderError({ provider, phase, error, kind, userId, endpoint }) {
   const err = error || {};
-  console.error(
-    JSON.stringify({
-      event: "generation_provider_error",
-      provider: provider || null,
-      phase: phase || null,
-      // Our own classification where we have one - safe by construction,
-      // because we assigned it.
-      kind: kind || null,
-      errorName: typeof err.name === "string" ? err.name : null,
-      status: statusOf(err),
-      requestId: requestIdOf(err),
-      message: safeMessage(err.message),
-      // Shape, not content.
-      bodyKeys: bodyKeys(err.body) || bodyKeys(err.details),
-      userId: userId || null,
-      endpoint: endpoint || null,
+  const payload = {
+    event: "generation_provider_error",
+    provider: provider || null,
+    phase: phase || null,
+    // Our own classification where we have one - safe by construction,
+    // because we assigned it.
+    kind: kind || null,
+    errorName: typeof err.name === "string" ? err.name : null,
+    status: statusOf(err),
+    requestId: requestIdOf(err),
+    message: safeMessage(err.message),
+    // Shape, not content.
+    bodyKeys: bodyKeys(err.body) || bodyKeys(err.details),
+    userId: userId || null,
+    endpoint: endpoint || null,
+  };
+  console.error(JSON.stringify(payload));
+
+  // System Health module (SEC-20.1/20.2): a second, persisted write of the
+  // exact same already-allowlisted fields above - nothing new is computed or
+  // exposed here. Fire-and-forget: this runs on the generation error path,
+  // which must never be slowed down or failed by a Postgres hiccup.
+  // systemIncidentModel.record() never throws (see there), the .catch() is
+  // defense in depth around that contract.
+  systemIncidentModel
+    .record({
+      source: "image_provider",
+      severity: "error",
+      provider: payload.provider,
+      phase: payload.phase,
+      kind: payload.kind,
+      message: payload.message,
+      statusCode: payload.status,
+      requestId: payload.requestId,
+      userId: payload.userId,
+      endpoint: payload.endpoint,
+      detail: payload.bodyKeys ? { bodyKeys: payload.bodyKeys, errorName: payload.errorName } : { errorName: payload.errorName },
     })
-  );
+    .catch(() => {});
 }
 
 module.exports = {

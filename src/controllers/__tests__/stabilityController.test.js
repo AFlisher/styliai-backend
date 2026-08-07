@@ -52,6 +52,23 @@ function makeAdminReqRes({ prompt = "a cat astronaut", negativePrompt, aspectRat
 }
 
 describe("stabilityController.generateImage", () => {
+  let originalBackendUrl;
+
+  beforeAll(() => {
+    // Deterministic regardless of a locally-loaded .env: withDeliveryUrls()
+    // prefers BACKEND_URL over the request-derived origin, and this suite's
+    // fake `req` has no `.get()`, so these tests must run with it unset to
+    // get the raw storage URLs they assert on (same seam as
+    // creationsController.delivery.test.js, which pins BACKEND_URL instead
+    // because it asserts on the rewritten form).
+    originalBackendUrl = process.env.BACKEND_URL;
+    delete process.env.BACKEND_URL;
+  });
+
+  afterAll(() => {
+    if (originalBackendUrl !== undefined) process.env.BACKEND_URL = originalBackendUrl;
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     walletService.deductBalance.mockResolvedValue(9);

@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
+const backupRunModel = require("../models/backupRunModel");
 
 /**
  * SEC-21.2 - an independent database backup, produced from this repository.
@@ -180,6 +181,23 @@ async function backupDatabase({
     pairWith: "run `npm run backup:storage` for the matching object backup",
   };
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+  // System Health module (SEC-21.1/21.2): the one write that makes "last
+  // successful backup" answerable from the running admin dashboard instead of
+  // only from this local manifest file. Never allowed to turn a completed,
+  // on-disk backup into a reported failure - the backup already succeeded by
+  // this point, so a Postgres hiccup here is logged and swallowed.
+  try {
+    await backupRunModel.record({
+      kind: "database",
+      status: "success",
+      bytes: stats.size,
+      durationMs: manifest.durationMs,
+      detail: { sha256: checksum, pgDumpVersion: tool.version, file: manifest.file },
+    });
+  } catch (err) {
+    console.error(`[backupDatabase] failed to record backup run: ${err.message}`);
+  }
 
   return { dumpPath, manifestPath, manifest };
 }

@@ -6,6 +6,7 @@ const { z } = require("zod");
 const walletService = require("../services/wallet/walletService");
 const adminMfaService = require("../services/adminMfaService");
 const { clampLimit } = require("../utils/pagination");
+const { logAuthFailure } = require("../utils/securityEvents");
 
 const adminLoginSchema = z.object({
   email: z.string().email("Invalid email format"),
@@ -88,6 +89,7 @@ async function login(req, res) {
       // SEC-1.2/SEC-15.7: burn the same bcrypt work as a real comparison
       // before the generic 401, so a timing probe can't distinguish this path.
       await bcrypt.compare(password, DUMMY_ADMIN_PASSWORD_HASH);
+      logAuthFailure(req, { reason: "unknown_email" });
       return res.status(401).json({
         message: "Invalid email or password."
       });
@@ -100,6 +102,7 @@ async function login(req, res) {
     // locked, and neither response nor timing reveals the lock.
     if (admin.is_locked) {
       await bcrypt.compare(password, DUMMY_ADMIN_PASSWORD_HASH);
+      logAuthFailure(req, { reason: "account_locked", subject: admin.id });
       return res.status(401).json({
         message: "Invalid email or password."
       });
@@ -112,6 +115,7 @@ async function login(req, res) {
 
     if (!valid) {
       await recordFailedAttempt(admin.id);
+      logAuthFailure(req, { reason: "wrong_password", subject: admin.id });
       return res.status(401).json({
         message: "Invalid email or password."
       });
@@ -130,6 +134,7 @@ async function login(req, res) {
         // has already proved the password. Distinct from the generic 401 so the
         // dashboard knows to ask for a code rather than reporting bad
         // credentials. No token, partial or otherwise, is issued here.
+        logAuthFailure(req, { reason: "mfa_required", subject: admin.id });
         return res.status(401).json({
           code: "MFA_REQUIRED",
           message: "Enter the 6-digit code from your authenticator app."
@@ -147,6 +152,7 @@ async function login(req, res) {
         // which is in-memory (resets on every restart) and trivially spread
         // across addresses.
         await recordFailedAttempt(admin.id);
+        logAuthFailure(req, { reason: "mfa_invalid", subject: admin.id });
         return res.status(401).json({
           code: "MFA_INVALID",
           message: "That code is not valid. Please try again."

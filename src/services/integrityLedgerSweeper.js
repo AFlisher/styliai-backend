@@ -77,4 +77,14 @@ function resetForTest() {
   sweeping = false;
 }
 
-module.exports = { maybeSweep, resetForTest };
+/**
+ * System Health module: the in-memory state above, read-only. `lastSweepAt`
+ * is 0 (never swept this process) until the first `maybeSweep()` actually
+ * starts a sweep - reported as `null` rather than the epoch, since "0" would
+ * otherwise read as a real, very old timestamp.
+ */
+function getStatus() {
+  return { lastSweepAt: lastSweepAt ? new Date(lastSweepAt).toISOString() : null, sweeping };
+}
+
+module.exports = { maybeSweep, resetForTest, getStatus };
