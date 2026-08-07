@@ -64,12 +64,20 @@ const ADMIN_ROUTE_POLICY = Object.freeze({
 
   // --- money, pricing and user records ---
   "GET /api/admin/users/search": "superadmin",
+  // User Management & Moderation module: browsing/reading many user records is
+  // the same PII exposure as searchUserByEmail's one-row lookup, just at
+  // volume - same tier.
+  "GET /api/admin/users": "superadmin",
+  "GET /api/admin/users/:id": "superadmin",
   "POST /api/admin/users/:id/adjust-balance": "superadmin",
   // SEC-18.2: suspending an account terminates its sessions immediately and
   // stops it spending. Same tier as balance adjustment - both are irreversible
   // -feeling actions against a specific, identified user.
   "POST /api/admin/users/:id/suspend": "superadmin",
   "POST /api/admin/users/:id/reinstate": "superadmin",
+  // Deletion is the same status-flip enforcement as suspend, so it gets the
+  // same tier as the rest of this group.
+  "POST /api/admin/users/:id/delete": "superadmin",
 
   // SEC-18.1 (Phase 8): the abuse review workflow.
   //

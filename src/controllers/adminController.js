@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const { z } = require("zod");
 const walletService = require("../services/wallet/walletService");
 const adminMfaService = require("../services/adminMfaService");
+const { clampLimit } = require("../utils/pagination");
 
 const adminLoginSchema = z.object({
   email: z.string().email("Invalid email format"),
@@ -243,6 +244,128 @@ async function searchUserByEmail(req, res) {
   }
 }
 
+const USER_LIST_STATUSES = new Set(["active", "suspended", "banned", "deleted"]);
+const USER_LIST_SORTS = {
+  newest: `u.created_at DESC, u.id DESC`,
+  oldest: `u.created_at ASC, u.id ASC`,
+  risk: `COALESCE(r.score, 0) DESC, u.created_at DESC`,
+};
+
+/**
+ * GET /api/admin/users?q=&status=&sort=&limit=&offset=
+ *
+ * The browsing counterpart to searchUserByEmail's exact-match lookup: the
+ * Users page needs to page through and filter accounts, not just resolve one
+ * email a support ticket already named. LEFT JOINs user_risk_scores (the same
+ * table abuseFindingModel.topRisk reads) so the list can show a risk figure
+ * per row without an N+1 follow-up call per user.
+ */
+async function listUsers(req, res) {
+  try {
+    const query = req.query || {};
+    const limit = clampLimit(query.limit, { def: 25, max: 100 });
+    const offset = Math.max(0, Math.floor(Number(query.offset)) || 0);
+
+    const status = typeof query.status === "string" ? query.status : "all";
+    if (status !== "all" && !USER_LIST_STATUSES.has(status)) {
+      return res.status(400).json({ message: "status must be one of: all, active, suspended, banned, deleted." });
+    }
+
+    const sortKey = typeof query.sort === "string" && USER_LIST_SORTS[query.sort] ? query.sort : "newest";
+
+    const where = [];
+    const params = [];
+
+    const q = typeof query.q === "string" ? query.q.trim() : "";
+    if (q) {
+      params.push(`%${q.toLowerCase()}%`);
+      where.push(`(LOWER(u.email) LIKE $${params.length} OR LOWER(u.full_name) LIKE $${params.length})`);
+    }
+    if (status !== "all") {
+      params.push(status);
+      where.push(`u.status = $${params.length}`);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const listParams = [...params, limit, offset];
+    const rows = await db.query(
+      `SELECT u.id, u.email, u.full_name AS "fullName", u.status,
+              u.created_at AS "createdAt", u.country_code AS "countryCode",
+              u.balance, r.score AS "riskScore"
+         FROM public.users u
+         LEFT JOIN user_risk_scores r ON r.user_id = u.id
+         ${whereSql}
+        ORDER BY ${USER_LIST_SORTS[sortKey]}
+        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      listParams
+    );
+
+    const countRes = await db.query(
+      `SELECT COUNT(*)::int AS total FROM public.users u ${whereSql}`,
+      params
+    );
+
+    res.json({
+      users: rows.rows,
+      total: countRes.rows[0]?.total ?? 0,
+      limit,
+      offset,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Internal server error." });
+  }
+}
+
+/**
+ * GET /api/admin/users/:id
+ *
+ * The Users page drawer's single data source: profile, credits summary and
+ * risk score in one call. Deliberately does NOT embed abuse findings or live
+ * sessions - those already have their own endpoints
+ * (GET /api/admin/abuse/findings?userId=, GET /api/admin/abuse/users/:id/sessions)
+ * and duplicating that query here would be a second definition of the same
+ * data. Credits history reuses walletService.getTransactionHistory verbatim
+ * (the same function the mobile app's own wallet screen calls) rather than a
+ * parallel SQL query, sliced to the most recent rows for a summary view.
+ */
+async function getUserDetail(req, res) {
+  try {
+    const { id } = req.params;
+
+    const userRes = await db.query(
+      `SELECT u.id, u.email, u.full_name AS "fullName", u.status,
+              u.status_reason AS "statusReason", u.status_changed_at AS "statusChangedAt",
+              u.created_at AS "createdAt", u.country_code AS "countryCode",
+              u.balance, u.email_verified AS "emailVerified",
+              r.score AS "riskScore", r.factors AS "riskFactors", r.computed_at AS "riskComputedAt"
+         FROM public.users u
+         LEFT JOIN user_risk_scores r ON r.user_id = u.id
+        WHERE u.id = $1`,
+      [id]
+    );
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ message: "No user found with this id." });
+    }
+
+    const user = userRes.rows[0];
+    const history = await walletService.getTransactionHistory(id);
+
+    res.json({
+      user,
+      credits: {
+        balance: user.balance,
+        recentTransactions: history.slice(0, 10),
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Internal server error." });
+  }
+}
+
 /**
  * POST /api/admin/users/:id/adjust-balance
  * Manually adds or deducts credits for a user, recorded as a type="admin"
@@ -393,10 +516,30 @@ async function reinstateUser(req, res) {
   return setUserStatus(req, res, { status: "active", reason: null });
 }
 
+/**
+ * POST /api/admin/users/:id/delete
+ *
+ * Account deletion, implemented as the SAME status-flip setUserStatus already
+ * gives suspend/reinstate rather than a real SQL DELETE. A `DELETE FROM users`
+ * would cascade into `profiles` and orphan wallet_transactions, creations and
+ * abuse_findings rows that have no recovery path - see
+ * migration_user_account_deletion.sql for the full reasoning. Reusing
+ * setUserStatus means deletion gets the exact same guarantees suspension
+ * already has for free: token_version bump, every refresh token revoked, and
+ * the account is refused at the next request rather than at next login.
+ */
+async function deleteUser(req, res) {
+  const reason = req.body && typeof req.body.reason === "string" ? req.body.reason.slice(0, 500) : null;
+  return setUserStatus(req, res, { status: "deleted", reason });
+}
+
 module.exports = {
   login,
   searchUserByEmail,
+  listUsers,
+  getUserDetail,
   adjustUserBalance,
   suspendUser,
   reinstateUser,
+  deleteUser,
 };

@@ -28,12 +28,20 @@ router.get("/stats/countries", adminActionLimiter, adminAuthMiddleware, requireA
 router.get("/analytics/generation/overview", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/analytics/generation/overview"), adminGenerationAnalyticsController.getOverview);
 router.get("/analytics/generation/summary", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/analytics/generation/summary"), adminGenerationAnalyticsController.getSummary);
 router.get("/users/search", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/users/search"), adminController.searchUserByEmail);
+// User Management & Moderation module: browse/filter (list) and the drawer's
+// single detail fetch. Same superadmin tier as searchUserByEmail - both
+// surface user PII, just for many rows instead of exactly one.
+router.get("/users", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/users"), adminController.listUsers);
+router.get("/users/:id", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("GET /api/admin/users/:id"), uuidParams("id"), adminController.getUserDetail);
 router.post("/users/:id/adjust-balance", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/adjust-balance"), adminController.adjustUserBalance);
 // SEC-18.2 (Phase 6): account suspension. superadmin tier - it acts on a named
 // user and ends their sessions, which sits with balance adjustment and PII
 // lookup rather than with catalog authoring.
 router.post("/users/:id/suspend", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/suspend"), adminController.suspendUser);
 router.post("/users/:id/reinstate", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/reinstate"), adminController.reinstateUser);
+// Account deletion (soft: see adminController.deleteUser / the migration for
+// why this isn't a real row DELETE). Same tier and shape as suspend/reinstate.
+router.post("/users/:id/delete", adminActionLimiter, adminAuthMiddleware, requireAdminRoleFor("POST /api/admin/users/:id/delete"), uuidParams("id"), adminController.deleteUser);
 
 // SEC-18.1 (Phase 8): the abuse review workflow.
 //
